@@ -7,10 +7,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// The spec's 7 permission roles plus LECTURER: an approved lecturer who has
+// no CPI-scoped role yet. Supervisor/Evaluator/Head Judge are per-CPI roles a
+// lecturer takes on via junction tables (Week 3); LECTURER is the account-level
+// base identity they hold in between.
 enum Role {
   SUPER_ADMIN
   SYSTEM_ADMIN
   COURSE_COORDINATOR
+  LECTURER
   SUPERVISOR
   EVALUATOR
   HEAD_JUDGE
@@ -55,6 +60,7 @@ enum CpiPhase {
 model User {
   id                  String   @id @default(uuid())
   email               String   @unique
+  fullName            String   @default("") @map("full_name")
   passwordHash        String   @map("password_hash")
   role                Role
   forcePasswordChange Boolean  @default(false) @map("force_password_change")
@@ -64,6 +70,8 @@ model User {
   student           Student?
   lecturer          Lecturer?
   createdCpis       CourseInstance[] @relation("CpiCreatedBy")
+  auditLogs         AuditLog[]
+  provisioningLogs  StudentProvisioningLog[]
 
   @@map("users")
 }
@@ -126,4 +134,51 @@ model CpiTimeline {
 
   @@unique([courseInstanceId, phase])
   @@map("cpi_timelines")
+}
+
+// Append-only trail of every write operation (spec 7.1: "never deleted").
+// actorId is nullable so unauthenticated writes (login attempts, lecturer
+// self-registration) are still recorded. payloadHash is a SHA-256 of the
+// request body — a fingerprint for integrity disputes without ever storing
+// raw payload contents (which may include passwords or student PII).
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorId     String?  @map("actor_id")
+  action      String // e.g. "POST /students/bulk-provision"
+  resource    String // route path actually hit, with params resolved
+  payloadHash String?  @map("payload_hash")
+  statusCode  Int      @map("status_code")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+enum EmailDeliveryStatus {
+  QUEUED
+  SENT
+  FAILED
+}
+
+// One row per student per bulk-provisioning batch (spec 2.2): records that
+// the credential email was dispatched and whether it arrived, so failed
+// deliveries can be flagged for System Admin review.
+model StudentProvisioningLog {
+  id             String              @id @default(uuid())
+  batchId        String              @map("batch_id")
+  userId         String              @map("user_id")
+  email          String
+  deliveryStatus EmailDeliveryStatus @default(QUEUED) @map("delivery_status")
+  failureReason  String?             @map("failure_reason")
+  dispatchedAt   DateTime?           @map("dispatched_at")
+  createdAt      DateTime            @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+  @@index([deliveryStatus])
+  @@map("student_provisioning_log")
 }

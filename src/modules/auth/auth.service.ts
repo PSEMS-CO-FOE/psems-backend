@@ -16,7 +16,7 @@ export class AuthError extends Error {
 }
 
 export async function login(email: string, password: string) {
-  const user = await prisma.user.findUnique({ where: { email } });
+  const user = await prisma.user.findUnique({ where: { email }, include: { lecturer: true } });
   if (!user) {
     throw new AuthError(401, "Invalid email or password");
   }
@@ -24,6 +24,16 @@ export async function login(email: string, password: string) {
   const passwordMatches = await bcrypt.compare(password, user.passwordHash);
   if (!passwordMatches) {
     throw new AuthError(401, "Invalid email or password");
+  }
+
+  // Checked only AFTER password verification: reporting approval status on a
+  // wrong password would let anyone probe whether an email has applied.
+  if (user.lecturer && user.lecturer.approvalStatus !== "APPROVED") {
+    const message =
+      user.lecturer.approvalStatus === "PENDING"
+        ? "Your registration is awaiting System Admin approval"
+        : "Your registration was rejected — contact the System Admin";
+    throw new AuthError(403, message);
   }
 
   const accessToken = signAccessToken({ user_id: user.id, role: user.role, email: user.email });

@@ -3,6 +3,7 @@ import request from "supertest";
 import { app } from "../../app";
 import { prisma } from "../../config/database";
 import { redis } from "../../config/redis";
+import { emailQueue, queueConnection } from "../../jobs/emailQueue";
 import { Role } from "@prisma/client";
 
 const STUDENT_EMAIL = "week1-test-student@psems.dev";
@@ -13,6 +14,8 @@ const ADMIN_PASSWORD = "Admin#Pilot2026";
 
 describe("Week 1 acceptance: login + forced first-login password change", () => {
   beforeAll(async () => {
+    // Idempotent setup: a crashed previous run may have left these rows behind.
+    await prisma.user.deleteMany({ where: { email: { in: [STUDENT_EMAIL, ADMIN_EMAIL] } } });
     await prisma.user.create({
       data: {
         email: STUDENT_EMAIL,
@@ -38,6 +41,10 @@ describe("Week 1 acceptance: login + forced first-login password change", () => 
   afterAll(async () => {
     await prisma.user.deleteMany({ where: { email: { in: [STUDENT_EMAIL, ADMIN_EMAIL] } } });
     await prisma.$disconnect();
+    // app.ts now transitively opens the BullMQ connections (via students
+    // routes) — close them or jest hangs on open handles.
+    await emailQueue.close();
+    await queueConnection.quit();
     await redis.quit();
   });
 
