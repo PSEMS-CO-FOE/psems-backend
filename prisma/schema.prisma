@@ -1,0 +1,129 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  SYSTEM_ADMIN
+  COURSE_COORDINATOR
+  SUPERVISOR
+  EVALUATOR
+  HEAD_JUDGE
+  STUDENT
+}
+
+enum LecturerApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum CpiMode {
+  SUPERVISOR_LED
+  COORDINATOR_MANAGED
+}
+
+enum CpiProjectType {
+  FYP
+  DATA_MANAGEMENT
+  HPC
+  INNOVATION_CHALLENGE
+}
+
+// 10 phases per CPI (spec 3.2) — every system action is gated to one of these.
+enum CpiPhase {
+  STUDENT_REGISTRATION
+  SUPERVISOR_ADDITION
+  IDEA_ANNOUNCEMENT
+  PROJECT_SELECTION
+  PROJECT_REGISTRATION
+  EVALUATION_CONFIG
+  PROPOSAL_SUBMISSION
+  AVAILABILITY_SUBMISSION
+  EVALUATION_EXECUTION
+  FINAL_SUBMISSION
+}
+
+// All system users. `forcePasswordChange` is the single source of truth for
+// the forced first-login flow (spec 9.1) — deliberately not duplicated on
+// Student, to avoid two flags that can drift out of sync.
+model User {
+  id                  String   @id @default(uuid())
+  email               String   @unique
+  passwordHash        String   @map("password_hash")
+  role                Role
+  forcePasswordChange Boolean  @default(false) @map("force_password_change")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  student           Student?
+  lecturer          Lecturer?
+  createdCpis       CourseInstance[] @relation("CpiCreatedBy")
+
+  @@map("users")
+}
+
+// Extended profile for STUDENT-role users (spec 7.1).
+model Student {
+  id                 String  @id @default(uuid())
+  userId             String  @unique @map("user_id")
+  studentId          String  @unique @map("student_id")
+  department         String
+  year               Int
+  provisioningStatus String  @default("ACTIVE") @map("provisioning_status")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("students")
+}
+
+// Extended profile for lecturer-type users (Course Coordinator / Supervisor /
+// Evaluator / Head Judge are CPI-scoped roles a lecturer plays, added in
+// Week 3 via junction tables — this is the base account record).
+model Lecturer {
+  id               String                 @id @default(uuid())
+  userId           String                 @unique @map("user_id")
+  selfRegistered   Boolean                @default(false) @map("self_registered")
+  approvalStatus   LecturerApprovalStatus @default(PENDING) @map("approval_status")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("lecturers")
+}
+
+// A single run of a project-based course in a given semester/department
+// (spec 3.1). Mode is determined automatically at Step 3 of the lifecycle —
+// nullable until the coordinator adds supervisors or not.
+model CourseInstance {
+  id           String          @id @default(uuid())
+  projectType  CpiProjectType  @map("project_type")
+  department   String
+  academicYear String          @map("academic_year")
+  mode         CpiMode?
+  createdById  String          @map("created_by_id")
+  createdAt    DateTime        @default(now()) @map("created_at")
+
+  createdBy User          @relation("CpiCreatedBy", fields: [createdById], references: [id])
+  timeline  CpiTimeline[]
+
+  @@map("course_instances")
+}
+
+// Phase start/end dates per CPI — one row per phase (spec 7.1).
+model CpiTimeline {
+  id               String   @id @default(uuid())
+  courseInstanceId String   @map("course_instance_id")
+  phase            CpiPhase
+  startDate        DateTime @map("start_date")
+  endDate          DateTime @map("end_date")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+
+  @@unique([courseInstanceId, phase])
+  @@map("cpi_timelines")
+}

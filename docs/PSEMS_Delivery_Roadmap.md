@@ -3,6 +3,18 @@
 
 ---
 
+## Progress Log
+
+**Week 1 (Jul 6–12) — COMPLETE, verified 2026-07-06.** Delivered on the `dev` branch of `psems-backend`:
+- Prisma schema v1: `User`, `Student`, `Lecturer`, `CourseInstance`, `CpiTimeline` models with 5 enums (`Role`, `LecturerApprovalStatus`, `CpiMode`, `CpiProjectType`, `CpiPhase` — the 10-phase lifecycle enum from spec 3.2). Migration generated and present (`20260705210200_week1_init`).
+- Auth: login, forced-first-login change-password, refresh, logout. JWT access tokens (15 min), rotated refresh tokens stored as opaque random strings in Redis keyed by `jti` (not JWTs) — this is what makes true revocation on logout/theft possible, a detail worth understanding since it's easy to get wrong. bcrypt work factor 12. `forcePasswordChange` is a DB flag re-checked per request, deliberately not embedded in the JWT payload (spec 9.1 — minimal token payload).
+- Middleware: `requireAuth` (JWT verify), `requireRole` (RBAC skeleton, not yet wired to any route — no CPI-scoped endpoints exist yet), `blockIfPasswordChangeRequired`, centralized Zod/Auth error handler, Helmet + CORS (dev-permissive, flagged for Week 12 lockdown).
+- Testing: Jest + Supertest acceptance test covering the real Week 1 promise end-to-end (provisioned student blocked until password change → change succeeds → re-login succeeds → protected route accessible; standard accounts never forced; unauthenticated requests rejected). `npx tsc --noEmit` verified clean.
+- CI: GitHub Actions workflow runs typecheck, lint, `prisma migrate deploy`, and the full test suite against real Postgres+pgvector and Redis service containers — not mocked.
+- **Two open items:** (1) all of the above exists only as uncommitted/untracked files on the `dev` branch as of this check — commit before starting Week 2. (2) ESLint timed out during my own verification pass (environment issue on my end, not necessarily the code) — run `npm run lint` yourself to confirm it's clean before trusting it.
+
+---
+
 ## 1. The honest reality check
 
 Your submitted proposal's own Gantt chart budgets **8 months** (April–November 2026) for this scope, built with an assumption of steady progress since April. You're starting the actual build today, July 5, with **~12.5 weeks** to a **real pilot launch** — not just a graded demo. That's roughly a third of the originally planned time, solo.
@@ -48,7 +60,7 @@ Each week = a working backend module **and** the minimal UI to actually use it. 
 | Week | Dates | Build | Demo at end of week |
 |---|---|---|---|
 | 0 (today) | Jul 5–6 | Confirm pilot department/CPI with your supervisor/coordinator contact. **Request historical faculty project data today** — this has external lag and gates all ML work in Weeks 9–11. | Data request sent; pilot scope confirmed in writing |
-| 1 | Jul 6–12 | Repo + Docker Compose (Postgres+pgvector, Redis), Prisma schema v1 (users, students, lecturers, course_instances, cpi_timelines), JWT+bcrypt auth, forced first-login password change, RBAC middleware skeleton, CI (lint+test on push) | Login works for a seeded Admin + Student; first-login flow enforced |
+| 1 ✅ | Jul 6–12 | Repo + Docker Compose (Postgres+pgvector, Redis), Prisma schema v1 (users, students, lecturers, course_instances, cpi_timelines), JWT+bcrypt auth, forced first-login password change, RBAC middleware skeleton, CI (lint+test on push) | Login works for a seeded Admin + Student; first-login flow enforced — **done, see Progress Log above** |
 | 2 | Jul 13–19 | Student bulk provisioning (CSV import → temp password gen → Bull-queued email dispatch), lecturer self-registration + admin approval, audit log middleware | Admin uploads a CSV of 20 test students → all receive credential emails |
 | 3 | Jul 20–26 | CPI creation, timeline engine (10 phases), phase-gating middleware, supervisor addition step (mode determination), evaluator/Head Judge assignment | Coordinator creates a CPI, sets phase dates, adds a supervisor → mode flips to Supervisor-Led |
 | 4 | Jul 27–Aug 2 | Group formation (invite/accept/lock), idea posting with mode-specific visibility rules, coordinator approve/reject (Coordinator-Managed) | Students form a group, post an idea, visibility rules verified for both modes |
@@ -69,23 +81,4 @@ Each week = a working backend module **and** the minimal UI to actually use it. 
 - **Evaluator score isolation before Head Judge review** — a broken version of this undermines the entire academic-integrity pitch of the project.
 - **Forced first-login password change + bcrypt + JWT short-lived tokens** — this touches real students' real credentials.
 - **RBAC checks at both middleware and service layer** — one missed check is a data leak between groups/students, which is the exact "fairness" problem PSEMS exists to solve.
-- **Audit logging on all write operations** — needed for both academic integrity and for your own debugging sanity once real users touch it.
-- **Anonymization of historical data before ML training** — non-negotiable regardless of timeline, per the spec's own privacy section.
-
-## 5. Cut list, in priority order (use only if a week actually slips)
-
-1. Topic trend clustering visuals — ship as a simple bar chart instead of stacked bar + bubble chart combo.
-2. Supervisor compatibility scoring — ship as keyword/TF-IDF overlap instead of a fully tuned SBERT profile match; upgrade post-launch.
-3. Grade distribution analytics — ship 2–3 core charts (box plot, bar chart) instead of the full six-visualization set; nightly cron precompute can be on-demand compute instead for pilot scale.
-4. Scheduling conflict UI polish — manual coordinator resolution is fine; don't build automated conflict-suggestion logic.
-5. Never touch: auth, RBAC, evaluator isolation, mark aggregation correctness, or data privacy — these are the actual point of the system.
-
-## 6. Immediate next steps (this week)
-
-1. Confirm with your supervisor which specific department/CPI is the real pilot target — this determines the real student email list you'll need for provisioning testing.
-2. **Send the historical project data request to the faculty/department today.** This is the single most likely external bottleneck — everything in Weeks 9–11 depends on having usable data by ~mid-August.
-3. Set up the repo skeleton (I can scaffold this with you directly — monorepo with `/backend`, `/frontend`, `/ml-service`, `docker-compose.yml`).
-4. Decide your evaluation/testing rhythm with me: I'd suggest a short check-in at the end of each week against the table in Section 3 — tell me what actually shipped vs. planned, and we adjust the following week rather than pretending the plan survived contact with reality.
-
----
-*This roadmap assumes ordinary availability alongside other coursework. If you have exams or other module deadlines in this window, tell me the dates and we'll redistribute the weeks around them rather than discover the conflict in August.*
+- **Audit logging on all write operations** — needed for both academic integrity and for your own debugging sanity 
