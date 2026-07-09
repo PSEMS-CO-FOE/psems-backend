@@ -3,6 +3,7 @@ import { LecturerApprovalStatus, Role } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { env } from "../../config/env";
 import { AuthError } from "../auth/auth.service";
+import { assertRole } from "../shared/authorization";
 import { RegisterLecturerInput } from "./lecturers.schemas";
 
 const BCRYPT_WORK_FACTOR = 12;
@@ -40,7 +41,7 @@ export async function registerLecturer(input: RegisterLecturerInput) {
 }
 
 export async function listPendingLecturers(actorUserId: string) {
-  await assertSystemAdmin(actorUserId);
+  await assertRole(actorUserId, Role.SYSTEM_ADMIN);
   return prisma.lecturer.findMany({
     where: { approvalStatus: LecturerApprovalStatus.PENDING },
     select: {
@@ -56,7 +57,7 @@ export async function decideLecturer(
   lecturerId: string,
   decision: "APPROVED" | "REJECTED",
 ) {
-  await assertSystemAdmin(actorUserId);
+  await assertRole(actorUserId, Role.SYSTEM_ADMIN);
 
   const lecturer = await prisma.lecturer.findUnique({ where: { id: lecturerId } });
   if (!lecturer) {
@@ -69,12 +70,4 @@ export async function decideLecturer(
     select: { id: true, approvalStatus: true, user: { select: { email: true, fullName: true } } },
   });
   return updated;
-}
-
-// Service-layer RBAC re-check (spec 9.2) — same pattern as provisioning.
-async function assertSystemAdmin(actorUserId: string) {
-  const actor = await prisma.user.findUnique({ where: { id: actorUserId } });
-  if (!actor || actor.role !== Role.SYSTEM_ADMIN) {
-    throw new AuthError(403, "Only a System Admin can manage lecturer approvals");
-  }
 }

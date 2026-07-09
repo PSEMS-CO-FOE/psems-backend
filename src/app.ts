@@ -5,6 +5,7 @@ import helmet from "helmet";
 import { auditLogger } from "./middleware/audit";
 import { errorHandler } from "./middleware/errorHandler";
 import { authRouter } from "./modules/auth/auth.routes";
+import { coursesRouter } from "./modules/courses/courses.routes";
 import { lecturersRouter } from "./modules/lecturers/lecturers.routes";
 import { studentsRouter } from "./modules/students/students.routes";
 import { usersRouter } from "./modules/users/users.routes";
@@ -23,5 +24,6 @@ app.use("/auth", authRouter);
 app.use("/users", usersRouter);
 app.use("/students", studentsRouter);
 app.use("/lecturers", lecturersRouter);
+app.use("/courses", coursesRouter);
 
 app.use(errorHandler);

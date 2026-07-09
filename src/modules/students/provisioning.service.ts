@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { Prisma, Role } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { emailQueue } from "../../jobs/emailQueue";
-import { AuthError } from "../auth/auth.service";
+import { assertRole } from "../shared/authorization";
 import { csvStudentRowSchema, CsvStudentRow } from "./students.schemas";
 import { generateTempPassword } from "./tempPassword";
 
@@ -23,10 +23,7 @@ export async function bulkProvisionStudents(
 ): Promise<BulkProvisionResult> {
   // Service-layer RBAC re-check (spec 9.2 defense in depth): even if route
   // middleware were bypassed or misconfigured, this write refuses non-admins.
-  const actor = await prisma.user.findUnique({ where: { id: actorUserId } });
-  if (!actor || actor.role !== Role.SYSTEM_ADMIN) {
-    throw new AuthError(403, "Only a System Admin can provision students");
-  }
+  await assertRole(actorUserId, Role.SYSTEM_ADMIN);
 
   const rawRows: Record<string, string>[] = parse(csvBuffer, {
     columns: true, // first line is the header row

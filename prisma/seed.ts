@@ -1,4 +1,4 @@
-import { PrismaClient, Role } from "@prisma/client";
+import { LecturerApprovalStatus, PrismaClient, Role } from "@prisma/client";
 import bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
@@ -8,6 +8,8 @@ const BCRYPT_WORK_FACTOR = 12;
 async function main() {
   const adminPasswordHash = await bcrypt.hash("Admin#Pilot2026", BCRYPT_WORK_FACTOR);
   const studentTempPasswordHash = await bcrypt.hash("Temp#Passw0rd1", BCRYPT_WORK_FACTOR);
+  const coordinatorPasswordHash = await bcrypt.hash("Coord#Pilot2026", BCRYPT_WORK_FACTOR);
+  const lecturerPasswordHash = await bcrypt.hash("Lect#Pilot2026", BCRYPT_WORK_FACTOR);
 
   const admin = await prisma.user.upsert({
     where: { email: "admin@psems.dev" },
@@ -38,9 +40,52 @@ async function main() {
     },
   });
 
+  // A Course Coordinator: an approved lecturer already promoted to the
+  // coordinator role. Keeps its lecturer profile row (approval history intact).
+  const coordinator = await prisma.user.upsert({
+    where: { email: "coordinator@psems.dev" },
+    update: {},
+    create: {
+      email: "coordinator@psems.dev",
+      fullName: "Prof. Coordinator",
+      passwordHash: coordinatorPasswordHash,
+      role: Role.COURSE_COORDINATOR,
+      forcePasswordChange: false,
+      lecturer: {
+        create: { selfRegistered: false, approvalStatus: LecturerApprovalStatus.APPROVED },
+      },
+    },
+  });
+
+  // Two approved lecturers available to be invited as supervisors / assigned
+  // as evaluators in a CPI.
+  const lecturers = [];
+  for (const [email, fullName] of [
+    ["lecturer1@psems.dev", "Dr. Alpha"],
+    ["lecturer2@psems.dev", "Dr. Beta"],
+  ]) {
+    const user = await prisma.user.upsert({
+      where: { email },
+      update: {},
+      create: {
+        email,
+        fullName,
+        passwordHash: lecturerPasswordHash,
+        role: Role.LECTURER,
+        forcePasswordChange: false,
+        lecturer: {
+          create: { selfRegistered: true, approvalStatus: LecturerApprovalStatus.APPROVED },
+        },
+      },
+    });
+    lecturers.push(user);
+  }
+
   console.log("Seeded users:");
-  console.log(`  Admin:   ${admin.email} / Admin#Pilot2026`);
-  console.log(`  Student: ${studentUser.email} / Temp#Passw0rd1 (force_password_change = true)`);
+  console.log(`  Admin:       ${admin.email} / Admin#Pilot2026`);
+  console.log(`  Student:     ${studentUser.email} / Temp#Passw0rd1 (force_password_change = true)`);
+  console.log(`  Coordinator: ${coordinator.email} / Coord#Pilot2026`);
+  console.log(`  Lecturers:   ${lecturers.map((l) => l.email).join(", ")} / Lect#Pilot2026`);
 }
 
 main()

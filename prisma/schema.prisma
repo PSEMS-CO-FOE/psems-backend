@@ -40,6 +40,21 @@ enum CpiProjectType {
   INNOVATION_CHALLENGE
 }
 
+// Whether students take part as groups or individually (spec 3.3 Step 1).
+// Stored at creation; acted on in Week 4's group formation.
+enum CpiParticipationMode {
+  GROUP
+  INDIVIDUAL
+}
+
+// Supervisor invitations must be accepted by the lecturer (spec 3.3 Step 3);
+// reused for any invite/accept flow at CPI scope.
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
 // 10 phases per CPI (spec 3.2) — every system action is gated to one of these.
 enum CpiPhase {
   STUDENT_REGISTRATION
@@ -99,27 +114,69 @@ model Lecturer {
   selfRegistered   Boolean                @default(false) @map("self_registered")
   approvalStatus   LecturerApprovalStatus @default(PENDING) @map("approval_status")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cpiSupervisorRoles CpiSupervisor[]
+  cpiEvaluatorRoles  CpiEvaluator[]
 
   @@map("lecturers")
 }
 
 // A single run of a project-based course in a given semester/department
 // (spec 3.1). Mode is determined automatically at Step 3 of the lifecycle —
-// nullable until the coordinator adds supervisors or not.
+// nullable until the coordinator adds supervisors or explicitly skips.
 model CourseInstance {
-  id           String          @id @default(uuid())
-  projectType  CpiProjectType  @map("project_type")
-  department   String
-  academicYear String          @map("academic_year")
-  mode         CpiMode?
-  createdById  String          @map("created_by_id")
-  createdAt    DateTime        @default(now()) @map("created_at")
+  id                String               @id @default(uuid())
+  name              String // e.g. "Computer Engineering FYP 2026"
+  projectType       CpiProjectType       @map("project_type")
+  participationMode CpiParticipationMode @map("participation_mode")
+  department        String
+  academicYear      String               @map("academic_year")
+  mode              CpiMode?
+  createdById       String               @map("created_by_id")
+  createdAt         DateTime             @default(now()) @map("created_at")
 
-  createdBy User          @relation("CpiCreatedBy", fields: [createdById], references: [id])
-  timeline  CpiTimeline[]
+  createdBy   User            @relation("CpiCreatedBy", fields: [createdById], references: [id])
+  timeline    CpiTimeline[]
+  supervisors CpiSupervisor[]
+  evaluators  CpiEvaluator[]
 
   @@map("course_instances")
+}
+
+// Which lecturers the coordinator invited as supervisors for a CPI (spec 3.3
+// Step 3 / table cpi_supervisors). The presence of ANY row flips the CPI into
+// Supervisor-Led mode; each invite must be accepted by the lecturer.
+model CpiSupervisor {
+  id               String           @id @default(uuid())
+  courseInstanceId String           @map("course_instance_id")
+  lecturerId       String           @map("lecturer_id")
+  invitationStatus InvitationStatus @default(PENDING) @map("invitation_status")
+  invitedAt        DateTime         @default(now()) @map("invited_at")
+  respondedAt      DateTime?        @map("responded_at")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  lecturer       Lecturer       @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+
+  @@unique([courseInstanceId, lecturerId])
+  @@map("cpi_supervisors")
+}
+
+// The evaluator pool for a CPI plus which one is Head Judge (spec 3.3 Step 3 /
+// table cpi_evaluators). Exists in BOTH modes — evaluation happens regardless
+// of whether the CPI is supervisor-led. Exactly one row may have
+// isHeadJudge=true per CPI (enforced in the service layer).
+model CpiEvaluator {
+  id               String   @id @default(uuid())
+  courseInstanceId String   @map("course_instance_id")
+  lecturerId       String   @map("lecturer_id")
+  isHeadJudge      Boolean  @default(false) @map("is_head_judge")
+  assignedAt       DateTime @default(now()) @map("assigned_at")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  lecturer       Lecturer       @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+
+  @@unique([courseInstanceId, lecturerId])
+  @@map("cpi_evaluators")
 }
 
 // Phase start/end dates per CPI — one row per phase (spec 7.1).
