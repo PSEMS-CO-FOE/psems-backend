@@ -48,11 +48,37 @@ enum CpiParticipationMode {
 }
 
 // Supervisor invitations must be accepted by the lecturer (spec 3.3 Step 3);
-// reused for any invite/accept flow at CPI scope.
+// reused for group-membership invites too (leader invites → member accepts).
 enum InvitationStatus {
   PENDING
   ACCEPTED
   DECLINED
+}
+
+// Who authored a project idea (spec 3.3 Step 5 / table project_ideas).
+enum IdeaAuthorType {
+  SUPERVISOR
+  COORDINATOR
+  STUDENT
+}
+
+// Denormalized visibility class, set deterministically from author type at
+// creation. PUBLIC_TO_STUDENTS = every student in the CPI may see it
+// (supervisor/coordinator-posted); GROUP_RESTRICTED = only the author's own
+// group, plus supervisors/coordinator (student-posted). The actual access
+// check is done per-requester in the list query — this column is a readable
+// label + a hook for the Week 9 ML/similarity layer.
+enum IdeaVisibility {
+  PUBLIC_TO_STUDENTS
+  GROUP_RESTRICTED
+}
+
+// Coordinator's accept/reject decision on a student idea — only meaningful in
+// Coordinator-Managed mode (spec 3.3 Step 5). Null for all other ideas.
+enum IdeaApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 // 10 phases per CPI (spec 3.2) — every system action is gated to one of these.
@@ -87,6 +113,7 @@ model User {
   createdCpis       CourseInstance[] @relation("CpiCreatedBy")
   auditLogs         AuditLog[]
   provisioningLogs  StudentProvisioningLog[]
+  postedIdeas       ProjectIdea[]
 
   @@map("users")
 }
@@ -100,7 +127,9 @@ model Student {
   year               Int
   provisioningStatus String  @default("ACTIVE") @map("provisioning_status")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledGroups        Group[]       @relation("GroupLeader")
+  groupMemberships GroupMember[]
 
   @@map("students")
 }
@@ -139,6 +168,8 @@ model CourseInstance {
   timeline    CpiTimeline[]
   supervisors CpiSupervisor[]
   evaluators  CpiEvaluator[]
+  groups      Group[]
+  ideas       ProjectIdea[]
 
   @@map("course_instances")
 }
@@ -177,6 +208,76 @@ model CpiEvaluator {
 
   @@unique([courseInstanceId, lecturerId])
   @@map("cpi_evaluators")
+}
+
+// A student project group within a CPI (spec 3.3 Step 4 / table groups). Groups
+// are mutated only during the STUDENT_REGISTRATION phase; once that window
+// closes they are effectively locked (enforced by phase-gating, so no stored
+// lock flag — "locked" is derived from the timeline).
+model Group {
+  id               String   @id @default(uuid())
+  courseInstanceId String   @map("course_instance_id")
+  name             String
+  leaderStudentId  String   @map("leader_student_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  leader         Student        @relation("GroupLeader", fields: [leaderStudentId], references: [id])
+  members        GroupMember[]
+  ideas          ProjectIdea[]
+
+  @@index([courseInstanceId])
+  @@map("groups")
+}
+
+// Group membership + the invite/accept flow in one table (spec table
+// group_members). Leader's own row is ACCEPTED at creation; invitees start
+// PENDING and flip to ACCEPTED/DECLINED. "One accepted group per student per
+// CPI" is enforced in the service layer (needs a cross-group check Prisma
+// can't express as a single unique constraint).
+model GroupMember {
+  id        String           @id @default(uuid())
+  groupId   String           @map("group_id")
+  studentId String           @map("student_id")
+  status    InvitationStatus @default(PENDING)
+  invitedAt DateTime         @default(now()) @map("invited_at")
+  joinedAt  DateTime?        @map("joined_at")
+
+  group   Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, studentId])
+  @@index([studentId])
+  @@map("group_members")
+}
+
+// A project idea posted during Idea Announcement (spec 3.3 Step 5 / table
+// project_ideas). Exactly one author linkage is populated per authorType:
+//   SUPERVISOR / COORDINATOR -> authorUserId only (posted by that lecturer)
+//   STUDENT                  -> authorUserId (who posted) + groupId (whose idea)
+// visibility is derived from authorType at creation; approvalStatus is only
+// set for STUDENT ideas in Coordinator-Managed mode. similarityFlag is a
+// placeholder for the Week 9 ML plagiarism/similarity check.
+model ProjectIdea {
+  id               String              @id @default(uuid())
+  courseInstanceId String              @map("course_instance_id")
+  authorType       IdeaAuthorType      @map("author_type")
+  authorUserId     String              @map("author_user_id")
+  groupId          String?             @map("group_id")
+  title            String
+  description      String
+  visibility       IdeaVisibility
+  approvalStatus   IdeaApprovalStatus? @map("approval_status")
+  similarityFlag   Boolean             @default(false) @map("similarity_flag")
+  createdAt        DateTime            @default(now()) @map("created_at")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  author         User           @relation(fields: [authorUserId], references: [id])
+  group          Group?         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([courseInstanceId])
+  @@index([groupId])
+  @@map("project_ideas")
 }
 
 // Phase start/end dates per CPI — one row per phase (spec 7.1).

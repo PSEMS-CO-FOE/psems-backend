@@ -207,8 +207,9 @@ export async function setHeadJudge(coordinatorUserId: string, cpiId: string, lec
 // --- internal helpers ---
 
 // CPI-scope enforcement (spec 9.2 DB layer): a coordinator may only touch CPIs
-// they own. 404 for non-existent, 403 for someone else's.
-async function loadOwnedCpi(coordinatorUserId: string, cpiId: string): Promise<CourseInstance> {
+// they own. 404 for non-existent, 403 for someone else's. Exported for reuse
+// by other CPI-scoped modules (e.g. idea approval).
+export async function loadOwnedCpi(coordinatorUserId: string, cpiId: string): Promise<CourseInstance> {
   await assertRole(coordinatorUserId, Role.COURSE_COORDINATOR);
   const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
   if (!cpi) {

@@ -6,6 +6,8 @@ import { auditLogger } from "./middleware/audit";
 import { errorHandler } from "./middleware/errorHandler";
 import { authRouter } from "./modules/auth/auth.routes";
 import { coursesRouter } from "./modules/courses/courses.routes";
+import { groupsRouter } from "./modules/groups/groups.routes";
+import { ideasRouter } from "./modules/ideas/ideas.routes";
 import { lecturersRouter } from "./modules/lecturers/lecturers.routes";
 import { studentsRouter } from "./modules/students/students.routes";
 import { usersRouter } from "./modules/users/users.routes";
@@ -25,5 +27,7 @@ app.use("/users", usersRouter);
 app.use("/students", studentsRouter);
 app.use("/lecturers", lecturersRouter);
 app.use("/courses", coursesRouter);
+app.use("/courses/:cpiId/groups", groupsRouter);
+app.use("/courses/:cpiId/ideas", ideasRouter);
 
 app.use(errorHandler);
