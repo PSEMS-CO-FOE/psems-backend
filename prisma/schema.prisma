@@ -101,6 +101,13 @@ enum SelectionStatus {
   DECLINED
 }
 
+// How an allocation row came to be (spec 3.3 Step 7). Either derived from a
+// group's accepted selection, or set/changed by a coordinator override.
+enum AllocationSource {
+  FROM_SELECTION
+  COORDINATOR_OVERRIDE
+}
+
 // 10 phases per CPI (spec 3.2) — every system action is gated to one of these.
 enum CpiPhase {
   STUDENT_REGISTRATION
@@ -163,11 +170,12 @@ model Lecturer {
   selfRegistered   Boolean                @default(false) @map("self_registered")
   approvalStatus   LecturerApprovalStatus @default(PENDING) @map("approval_status")
 
-  user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  cpiSupervisorRoles   CpiSupervisor[]
-  cpiEvaluatorRoles    CpiEvaluator[]
-  willingExpressions   InterestExpression[]
-  supervisorSelections ProjectSelection[]
+  user                  User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cpiSupervisorRoles    CpiSupervisor[]
+  cpiEvaluatorRoles     CpiEvaluator[]
+  willingExpressions    InterestExpression[]
+  supervisorSelections  ProjectSelection[]
+  supervisorAllocations ProjectAllocation[]
 
   @@map("lecturers")
 }
@@ -176,17 +184,18 @@ model Lecturer {
 // (spec 3.1). Mode is determined automatically at Step 3 of the lifecycle —
 // nullable until the coordinator adds supervisors or explicitly skips.
 model CourseInstance {
-  id                String               @id @default(uuid())
-  name              String // e.g. "Computer Engineering FYP 2026"
-  projectType       CpiProjectType       @map("project_type")
-  participationMode CpiParticipationMode @map("participation_mode")
-  department        String
-  academicYear      String               @map("academic_year")
-  mode              CpiMode?
-  createdById       String               @map("created_by_id")
-  createdAt         DateTime             @default(now()) @map("created_at")
+  id                    String               @id @default(uuid())
+  name                  String // e.g. "Computer Engineering FYP 2026"
+  projectType           CpiProjectType       @map("project_type")
+  participationMode     CpiParticipationMode @map("participation_mode")
+  department            String
+  academicYear          String               @map("academic_year")
+  mode                  CpiMode?
+  allocationsFinalizedAt DateTime?           @map("allocations_finalized_at")
+  createdById           String               @map("created_by_id")
+  createdAt             DateTime             @default(now()) @map("created_at")
 
-  createdBy   User            @relation("CpiCreatedBy", fields: [createdById], references: [id])
+  createdBy           User                 @relation("CpiCreatedBy", fields: [createdById], references: [id])
   timeline            CpiTimeline[]
   supervisors         CpiSupervisor[]
   evaluators          CpiEvaluator[]
@@ -194,6 +203,9 @@ model CourseInstance {
   ideas               ProjectIdea[]
   interestExpressions InterestExpression[]
   projectSelections   ProjectSelection[]
+  allocations         ProjectAllocation[]
+  evaluationStages    EvaluationStage[]
+  submissions         Submission[]
 
   @@map("course_instances")
 }
@@ -227,8 +239,9 @@ model CpiEvaluator {
   isHeadJudge      Boolean  @default(false) @map("is_head_judge")
   assignedAt       DateTime @default(now()) @map("assigned_at")
 
-  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
-  lecturer       Lecturer       @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  courseInstance   CourseInstance   @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  lecturer         Lecturer         @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  stageAssignments StageEvaluator[]
 
   @@unique([courseInstanceId, lecturerId])
   @@map("cpi_evaluators")
@@ -251,6 +264,8 @@ model Group {
   ideas               ProjectIdea[]
   interestExpressions InterestExpression[]
   projectSelections   ProjectSelection[]
+  allocation          ProjectAllocation?
+  submissions         Submission[]
 
   @@index([courseInstanceId])
   @@map("groups")
@@ -302,6 +317,7 @@ model ProjectIdea {
   group               Group?               @relation(fields: [groupId], references: [id], onDelete: Cascade)
   interestExpressions InterestExpression[]
   projectSelections   ProjectSelection[]
+  allocations         ProjectAllocation[]
 
   @@index([courseInstanceId])
   @@index([groupId])
@@ -360,6 +376,106 @@ model ProjectSelection {
   @@index([courseInstanceId])
   @@index([groupId])
   @@map("project_selections")
+}
+
+// Finalized group ↔ project ↔ supervisor assignment (spec 3.3 Step 7 / table
+// project_allocations). One per group. Seeded from accepted selections, then
+// editable by the coordinator until the CPI's allocations are finalized
+// (CourseInstance.allocationsFinalizedAt).
+model ProjectAllocation {
+  id                   String           @id @default(uuid())
+  courseInstanceId     String           @map("course_instance_id")
+  groupId              String           @unique @map("group_id")
+  ideaId               String           @map("idea_id")
+  supervisorLecturerId String?          @map("supervisor_lecturer_id")
+  source               AllocationSource @default(FROM_SELECTION)
+  createdAt            DateTime         @default(now()) @map("created_at")
+  updatedAt            DateTime         @updatedAt @map("updated_at")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  group          Group          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  idea           ProjectIdea    @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  supervisor     Lecturer?      @relation(fields: [supervisorLecturerId], references: [id], onDelete: Cascade)
+
+  @@index([courseInstanceId])
+  @@map("project_allocations")
+}
+
+// A customizable evaluation stage (spec 3.3 Step 8 / table evaluation_stages).
+// weight is a percentage; stage weights sum to 100 across the CPI.
+model EvaluationStage {
+  id                 String   @id @default(uuid())
+  courseInstanceId   String   @map("course_instance_id")
+  name               String
+  weight             Int // percent; stages sum to 100 per CPI
+  evaluatorsRequired Int      @map("evaluators_required")
+  submissionRequired Boolean  @default(false) @map("submission_required")
+  orderIndex         Int      @map("order_index")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  courseInstance CourseInstance    @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  criteria       RubricCriterion[]
+  evaluators     StageEvaluator[]
+  submissions    Submission[]
+
+  @@index([courseInstanceId])
+  @@map("evaluation_stages")
+}
+
+// A rubric criterion within a stage (spec table rubric_criteria). weight is a
+// percentage; criteria weights sum to 100 within their stage.
+model RubricCriterion {
+  id                String  @id @default(uuid())
+  evaluationStageId String  @map("evaluation_stage_id")
+  name              String
+  description       String?
+  weight            Int // percent within the stage; criteria sum to 100
+  maxScore          Int     @map("max_score")
+  orderIndex        Int     @map("order_index")
+
+  stage EvaluationStage @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+
+  @@index([evaluationStageId])
+  @@map("rubric_criteria")
+}
+
+// Which CPI evaluators are assigned to a given stage (spec 3.3 Step 8: "assigns
+// specific evaluators per stage"). References the CPI-level evaluator pool row.
+model StageEvaluator {
+  id                String @id @default(uuid())
+  evaluationStageId String @map("evaluation_stage_id")
+  cpiEvaluatorId    String @map("cpi_evaluator_id")
+
+  stage        EvaluationStage @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+  cpiEvaluator CpiEvaluator    @relation(fields: [cpiEvaluatorId], references: [id], onDelete: Cascade)
+
+  @@unique([evaluationStageId, cpiEvaluatorId])
+  @@map("stage_evaluators")
+}
+
+// A group's file submission for a stage (spec 3.3 Step 9 / table submissions).
+// storagePath is backend-agnostic (local path or Supabase object key). isLate
+// is computed against the submission window at upload time — the deadline is
+// SOFT (late uploads are accepted and flagged, per spec "late submissions
+// flagged to coordinator"). One current submission per group per stage.
+model Submission {
+  id                String   @id @default(uuid())
+  courseInstanceId  String   @map("course_instance_id")
+  groupId           String   @map("group_id")
+  evaluationStageId String   @map("evaluation_stage_id")
+  storagePath       String   @map("storage_path")
+  fileName          String   @map("file_name")
+  fileSize          Int      @map("file_size")
+  isLate            Boolean  @default(false) @map("is_late")
+  submittedAt       DateTime @default(now()) @map("submitted_at")
+
+  courseInstance CourseInstance  @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  group          Group           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  stage          EvaluationStage @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, evaluationStageId])
+  @@index([courseInstanceId])
+  @@map("submissions")
 }
 
 // Phase start/end dates per CPI — one row per phase (spec 7.1).

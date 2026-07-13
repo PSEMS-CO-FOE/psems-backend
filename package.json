@@ -31,6 +31,7 @@
   "homepage": "https://github.com/PSEMS-CO-FOE/psems-backend#readme",
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@supabase/supabase-js": "^2.110.3",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.79.3",
     "cookie-parser": "^1.4.7",

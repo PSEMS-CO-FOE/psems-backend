@@ -26,3 +26,13 @@ export async function getAcceptedSupervisorLecturerId(userId: string, cpiId: str
   });
   return supervisor ? lecturer.id : null;
 }
+
+// The CpiEvaluator row id if this user is in this CPI's evaluator pool, or null.
+export async function getCpiEvaluatorId(userId: string, cpiId: string): Promise<string | null> {
+  const lecturer = await prisma.lecturer.findUnique({ where: { userId } });
+  if (!lecturer) return null;
+  const evaluator = await prisma.cpiEvaluator.findUnique({
+    where: { courseInstanceId_lecturerId: { courseInstanceId: cpiId, lecturerId: lecturer.id } },
+  });
+  return evaluator?.id ?? null;
+}

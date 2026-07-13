@@ -19,6 +19,13 @@ const envSchema = z.object({
   // When set (e.g. "eng.university.lk"), lecturer self-registration only
   // accepts emails on this domain (spec 2.1: "using university email").
   UNIVERSITY_EMAIL_DOMAIN: z.string().optional(),
+  // File storage: "local" (dev/test, writes to STORAGE_DIR) or "supabase"
+  // (pilot). Supabase needs URL + service key + bucket.
+  STORAGE_BACKEND: z.enum(["local", "supabase"]).default("local"),
+  STORAGE_DIR: z.string().default("uploads"),
+  SUPABASE_URL: z.string().optional(),
+  SUPABASE_SERVICE_KEY: z.string().optional(),
+  SUPABASE_BUCKET: z.string().default("submissions"),
 });
 
 const parsed = envSchema.safeParse(process.env);
