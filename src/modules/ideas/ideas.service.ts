@@ -1,33 +1,8 @@
-import {
-  CpiMode,
-  IdeaApprovalStatus,
-  IdeaAuthorType,
-  IdeaVisibility,
-  InvitationStatus,
-} from "@prisma/client";
+import { CpiMode, IdeaApprovalStatus, IdeaAuthorType, IdeaVisibility } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
-
-// The accepted supervisor row for this user in this CPI, or null.
-async function acceptedSupervisor(userId: string, cpiId: string) {
-  const lecturer = await prisma.lecturer.findUnique({ where: { userId } });
-  if (!lecturer) return null;
-  return prisma.cpiSupervisor.findFirst({
-    where: { courseInstanceId: cpiId, lecturerId: lecturer.id, invitationStatus: InvitationStatus.ACCEPTED },
-  });
-}
-
-// The id of the student's accepted group in this CPI, or null.
-async function acceptedGroupId(userId: string, cpiId: string): Promise<string | null> {
-  const student = await prisma.student.findUnique({ where: { userId } });
-  if (!student) return null;
-  const membership = await prisma.groupMember.findFirst({
-    where: { studentId: student.id, status: InvitationStatus.ACCEPTED, group: { courseInstanceId: cpiId } },
-    select: { groupId: true },
-  });
-  return membership?.groupId ?? null;
-}
+import { getAcceptedSupervisorLecturerId, getStudentGroupId } from "../shared/cpiMembership";
 
 // Post an idea during Idea Announcement. A single endpoint whose behaviour
 // depends on the actor's capacity for THIS CPI (spec 3.3 Step 5):
@@ -53,7 +28,7 @@ export async function postIdea(userId: string, cpiId: string, title: string, des
   }
 
   // 2. Supervisor posts — only in Supervisor-Led mode.
-  if (await acceptedSupervisor(userId, cpiId)) {
+  if (await getAcceptedSupervisorLecturerId(userId, cpiId)) {
     if (cpi.mode !== CpiMode.SUPERVISOR_LED) {
       throw new AuthError(403, "Supervisor ideas are only posted in Supervisor-Led mode");
     }
@@ -64,7 +39,7 @@ export async function postIdea(userId: string, cpiId: string, title: string, des
 
   // 3. Student posts on behalf of their group — both modes. In Coordinator-
   // Managed the coordinator must then approve it (starts PENDING).
-  const groupId = await acceptedGroupId(userId, cpiId);
+  const groupId = await getStudentGroupId(userId, cpiId);
   if (groupId) {
     return prisma.projectIdea.create({
       data: {
@@ -89,13 +64,13 @@ export async function listIdeas(userId: string, cpiId: string) {
     throw new AuthError(404, "CPI not found");
   }
 
-  const privileged = cpi.createdById === userId || (await acceptedSupervisor(userId, cpiId));
+  const privileged = cpi.createdById === userId || (await getAcceptedSupervisorLecturerId(userId, cpiId));
   let where;
   if (privileged) {
     // Coordinator and supervisors see everything in the CPI.
     where = { courseInstanceId: cpiId };
   } else {
-    const groupId = await acceptedGroupId(userId, cpiId);
+    const groupId = await getStudentGroupId(userId, cpiId);
     if (!groupId) {
       throw new AuthError(403, "You are not a participant in this CPI");
     }

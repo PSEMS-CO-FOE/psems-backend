@@ -81,6 +81,26 @@ enum IdeaApprovalStatus {
   REJECTED
 }
 
+// The three kinds of Expression of Interest at Project Selection (spec 3.3
+// Step 6 / table interest_expressions):
+//   GROUP_INTEREST     — a group ranks a supervisor-posted idea (rank 1–3)
+//   SEEKING_SUPERVISOR — a group flags its OWN idea, inviting supervisors
+//   SUPERVISOR_WILLING — a supervisor marks willingness on a student idea
+enum EoiType {
+  GROUP_INTEREST
+  SEEKING_SUPERVISOR
+  SUPERVISOR_WILLING
+}
+
+// Mutual-confirmation outcome for a group's chosen project (spec 3.3 Step 6 /
+// table project_selections). PENDING until the supervisor (Supervisor-Led) or
+// coordinator (Coordinator-Managed) responds.
+enum SelectionStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
 // 10 phases per CPI (spec 3.2) — every system action is gated to one of these.
 enum CpiPhase {
   STUDENT_REGISTRATION
@@ -143,9 +163,11 @@ model Lecturer {
   selfRegistered   Boolean                @default(false) @map("self_registered")
   approvalStatus   LecturerApprovalStatus @default(PENDING) @map("approval_status")
 
-  user               User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  cpiSupervisorRoles CpiSupervisor[]
-  cpiEvaluatorRoles  CpiEvaluator[]
+  user                 User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cpiSupervisorRoles   CpiSupervisor[]
+  cpiEvaluatorRoles    CpiEvaluator[]
+  willingExpressions   InterestExpression[]
+  supervisorSelections ProjectSelection[]
 
   @@map("lecturers")
 }
@@ -165,11 +187,13 @@ model CourseInstance {
   createdAt         DateTime             @default(now()) @map("created_at")
 
   createdBy   User            @relation("CpiCreatedBy", fields: [createdById], references: [id])
-  timeline    CpiTimeline[]
-  supervisors CpiSupervisor[]
-  evaluators  CpiEvaluator[]
-  groups      Group[]
-  ideas       ProjectIdea[]
+  timeline            CpiTimeline[]
+  supervisors         CpiSupervisor[]
+  evaluators          CpiEvaluator[]
+  groups              Group[]
+  ideas               ProjectIdea[]
+  interestExpressions InterestExpression[]
+  projectSelections   ProjectSelection[]
 
   @@map("course_instances")
 }
@@ -221,10 +245,12 @@ model Group {
   leaderStudentId  String   @map("leader_student_id")
   createdAt        DateTime @default(now()) @map("created_at")
 
-  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
-  leader         Student        @relation("GroupLeader", fields: [leaderStudentId], references: [id])
-  members        GroupMember[]
-  ideas          ProjectIdea[]
+  courseInstance      CourseInstance       @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  leader              Student              @relation("GroupLeader", fields: [leaderStudentId], references: [id])
+  members             GroupMember[]
+  ideas               ProjectIdea[]
+  interestExpressions InterestExpression[]
+  projectSelections   ProjectSelection[]
 
   @@index([courseInstanceId])
   @@map("groups")
@@ -271,13 +297,69 @@ model ProjectIdea {
   similarityFlag   Boolean             @default(false) @map("similarity_flag")
   createdAt        DateTime            @default(now()) @map("created_at")
 
-  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
-  author         User           @relation(fields: [authorUserId], references: [id])
-  group          Group?         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  courseInstance      CourseInstance       @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  author              User                 @relation(fields: [authorUserId], references: [id])
+  group               Group?               @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  interestExpressions InterestExpression[]
+  projectSelections   ProjectSelection[]
 
   @@index([courseInstanceId])
   @@index([groupId])
   @@map("project_ideas")
+}
+
+// Expression of Interest at Project Selection (spec 3.3 Step 6 / table
+// interest_expressions). One row per (group ranks an idea) / (group seeks a
+// supervisor for its own idea) / (supervisor is willing on a student idea).
+// Exactly one of groupId / supervisorLecturerId is set, per `type`.
+model InterestExpression {
+  id                   String   @id @default(uuid())
+  courseInstanceId     String   @map("course_instance_id")
+  ideaId               String   @map("idea_id")
+  type                 EoiType
+  groupId              String?  @map("group_id")
+  supervisorLecturerId String?  @map("supervisor_lecturer_id")
+  rank                 Int? // 1–3, only for GROUP_INTEREST
+  createdAt            DateTime @default(now()) @map("created_at")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  idea           ProjectIdea    @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  group          Group?         @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  supervisor     Lecturer?      @relation(fields: [supervisorLecturerId], references: [id], onDelete: Cascade)
+
+  // A group ranks a given idea at most once; a supervisor is willing on a given
+  // idea at most once. (Partial semantics differ by type but the pair is unique
+  // either way since only one of group/supervisor is set.)
+  @@unique([groupId, ideaId, type])
+  @@unique([supervisorLecturerId, ideaId, type])
+  @@index([courseInstanceId])
+  @@index([ideaId])
+  @@map("interest_expressions")
+}
+
+// A group's final project selection and its mutual-confirmation outcome (spec
+// 3.3 Step 6 / table project_selections). supervisorLecturerId is set in
+// Supervisor-Led (the supervisor who must accept), null in Coordinator-Managed
+// (the coordinator approves). "One active (non-declined) selection per group"
+// is enforced in the service layer.
+model ProjectSelection {
+  id                   String          @id @default(uuid())
+  courseInstanceId     String          @map("course_instance_id")
+  groupId              String          @map("group_id")
+  ideaId               String          @map("idea_id")
+  supervisorLecturerId String?         @map("supervisor_lecturer_id")
+  status               SelectionStatus @default(PENDING)
+  createdAt            DateTime        @default(now()) @map("created_at")
+  respondedAt          DateTime?       @map("responded_at")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  group          Group          @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  idea           ProjectIdea    @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  supervisor     Lecturer?      @relation(fields: [supervisorLecturerId], references: [id], onDelete: Cascade)
+
+  @@index([courseInstanceId])
+  @@index([groupId])
+  @@map("project_selections")
 }
 
 // Phase start/end dates per CPI — one row per phase (spec 7.1).

@@ -9,6 +9,7 @@ import { coursesRouter } from "./modules/courses/courses.routes";
 import { groupsRouter } from "./modules/groups/groups.routes";
 import { ideasRouter } from "./modules/ideas/ideas.routes";
 import { lecturersRouter } from "./modules/lecturers/lecturers.routes";
+import { selectionRouter } from "./modules/selection/selection.routes";
 import { studentsRouter } from "./modules/students/students.routes";
 import { usersRouter } from "./modules/users/users.routes";
 
@@ -29,5 +30,6 @@ app.use("/lecturers", lecturersRouter);
 app.use("/courses", coursesRouter);
 app.use("/courses/:cpiId/groups", groupsRouter);
 app.use("/courses/:cpiId/ideas", ideasRouter);
+app.use("/courses/:cpiId/selection", selectionRouter);
 
 app.use(errorHandler);
