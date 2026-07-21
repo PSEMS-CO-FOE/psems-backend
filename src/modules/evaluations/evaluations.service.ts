@@ -21,10 +21,9 @@ function validateWeights(input: EvaluationConfigInput) {
   }
 }
 
-// Define the whole evaluation config at once (spec 3.3 Step 8). Replace-all so
-// the config is never half-updated; validated so weights are internally
-// consistent. Blocked once submissions exist, since replacing stages would
-// cascade-delete them.
+// Define the whole evaluation config at once (spec 3.3 Step 8). Replace-all and
+// weight-validated; blocked once submissions exist (replacing stages would
+// cascade-delete them).
 export async function setEvaluationConfig(coordinatorUserId: string, cpiId: string, input: EvaluationConfigInput) {
   await loadOwnedCpi(coordinatorUserId, cpiId);
   validateWeights(input);

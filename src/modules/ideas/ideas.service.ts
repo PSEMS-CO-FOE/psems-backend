@@ -4,8 +4,8 @@ import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
 import { getAcceptedSupervisorLecturerId, getStudentGroupId } from "../shared/cpiMembership";
 
-// Post an idea during Idea Announcement. A single endpoint whose behaviour
-// depends on the actor's capacity for THIS CPI (spec 3.3 Step 5):
+// Post an idea (spec 3.3 Step 5). Single endpoint that branches on the actor's
+// capacity for this CPI:
 //   coordinator-owner (Coordinator-Managed) -> public coordinator idea
 //   accepted supervisor (Supervisor-Led)    -> public supervisor idea
 //   student in an accepted group            -> group-restricted student idea
@@ -55,9 +55,8 @@ export async function postIdea(userId: string, cpiId: string, title: string, des
   throw new AuthError(403, "You are not eligible to post ideas in this CPI");
 }
 
-// List ideas with visibility scoped to the requester (spec 3.3 Step 5). This
-// query IS the visibility rule — the same student idea is returned to its own
-// group and withheld from every other group.
+// List ideas scoped to the requester (spec 3.3 Step 5). This query IS the
+// visibility rule — a student idea reaches its own group and no other.
 export async function listIdeas(userId: string, cpiId: string) {
   const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
   if (!cpi) {

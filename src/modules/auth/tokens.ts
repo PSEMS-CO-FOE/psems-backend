@@ -17,10 +17,8 @@ export function signAccessToken(payload: AccessTokenPayload): string {
   return jwt.sign(payload, env.JWT_ACCESS_SECRET, { expiresIn: ACCESS_TOKEN_TTL });
 }
 
-// Refresh tokens are opaque random strings, not JWTs — the server holds the
-// only copy (in Redis, keyed by jti) so it can revoke/rotate on use or logout.
-// This is what makes the Redis blacklist-on-logout requirement (spec 9.1)
-// meaningful: a stateless JWT refresh token couldn't be invalidated early.
+// Opaque random token stored server-side (Redis) so it can be revoked early —
+// a stateless JWT refresh token couldn't be (spec 9.1).
 export async function issueRefreshToken(userId: string): Promise<string> {
   const jti = crypto.randomUUID();
   await redis.set(`refresh:${jti}`, userId, "EX", REFRESH_TOKEN_TTL_SECONDS);
@@ -30,8 +28,7 @@ export async function issueRefreshToken(userId: string): Promise<string> {
 export async function consumeRefreshToken(jti: string): Promise<string | null> {
   const userId = await redis.get(`refresh:${jti}`);
   if (!userId) return null;
-  // Rotation: the old token is deleted the moment it's used, whether for a
-  // refresh or a logout, so a stolen/replayed token only works once.
+  // Rotation: delete on use so a replayed token only works once.
   await redis.del(`refresh:${jti}`);
   return userId;
 }

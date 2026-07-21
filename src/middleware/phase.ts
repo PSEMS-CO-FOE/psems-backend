@@ -2,14 +2,9 @@ import { CpiPhase } from "@prisma/client";
 import { NextFunction, Request, Response } from "express";
 import { prisma } from "../config/database";
 
-// Gates an action to its designated CPI phase window (spec 3.3 Step 2). The
-// coordinator sets each phase's [startDate, endDate] during timeline setup;
-// this rejects any request that arrives before the window opens or after it
-// closes. Reads the CPI id from a route param (default ":cpiId").
-//
-// This is a time-window gate, distinct from RBAC (who) and CPI ownership
-// (whose CPI) — those are checked separately by role middleware and the
-// service layer.
+// Gates an action to its CPI phase window (spec 3.3 Step 2) — a time gate,
+// separate from RBAC (who) and CPI ownership (whose CPI). Reads the CPI id from
+// a route param (default ":cpiId").
 export function requirePhase(phase: CpiPhase, cpiIdParam = "cpiId") {
   return async (req: Request, res: Response, next: NextFunction) => {
     const cpiId = req.params[cpiIdParam];

@@ -21,8 +21,7 @@ export async function bulkProvisionStudents(
   actorUserId: string,
   csvBuffer: Buffer,
 ): Promise<BulkProvisionResult> {
-  // Service-layer RBAC re-check (spec 9.2 defense in depth): even if route
-  // middleware were bypassed or misconfigured, this write refuses non-admins.
+  // Service-layer RBAC re-check (spec 9.2 defense-in-depth).
   await assertRole(actorUserId, Role.SYSTEM_ADMIN);
 
   const rawRows: Record<string, string>[] = parse(csvBuffer, {
@@ -43,8 +42,8 @@ export async function bulkProvisionStudents(
     }
   });
 
-  // Pre-check duplicates (existing accounts and repeats within the file) so a
-  // re-run of an overlapping CSV provisions the missing students instead of failing.
+  // Pre-check duplicates so re-running an overlapping CSV provisions the missing
+  // students instead of failing the batch.
   const emails = valid.map((v) => v.data.email);
   const studentIds = valid.map((v) => v.data.studentId);
   const [existingUsers, existingStudents] = await Promise.all([
@@ -74,8 +73,7 @@ export async function bulkProvisionStudents(
 
   const batchId = crypto.randomUUID();
 
-  // bcrypt at work factor 12 costs ~250ms CPU per hash; hashing in parallel
-  // uses the libuv threadpool (4 threads by default) instead of serializing.
+  // Hash in parallel (bcrypt runs on the libuv threadpool) rather than serially.
   const prepared = await Promise.all(
     toCreate.map(async ({ data }) => {
       const tempPassword = generateTempPassword();
@@ -83,9 +81,7 @@ export async function bulkProvisionStudents(
     }),
   );
 
-  // One transaction for all account creates: either the whole cohort's valid
-  // rows land, or none do. Nested create writes User + Student + provisioning
-  // log atomically per student.
+  // All account creates in one transaction — the whole valid cohort lands or none does.
   const createOps = prepared.map(({ data, passwordHash }) =>
     prisma.user.create({
       data: {
@@ -112,10 +108,9 @@ export async function bulkProvisionStudents(
     isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
   });
 
-  // Enqueue ONLY after the transaction commits: enqueue-first could email
-  // credentials for accounts whose creation then rolled back. This ordering's
-  // worst case (commit ok, enqueue fails) just leaves logs in QUEUED, which
-  // the admin can see and retrigger.
+  // Enqueue only after commit — enqueue-first could email credentials for a
+  // rolled-back account. Worst case here (commit ok, enqueue fails) leaves the
+  // log QUEUED for the admin to retrigger.
   await Promise.all(
     createdUsers.map((user, i) =>
       emailQueue.add("credential-email", {

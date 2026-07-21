@@ -1,10 +1,9 @@
 import { NextFunction, Request, Response } from "express";
 import { prisma } from "../config/database";
 
-// Blocks access to every protected route until a provisioned account (e.g. a
-// bulk-created student) has changed its temporary password. The flag is
-// intentionally NOT embedded in the JWT (token payload stays minimal per spec
-// 9.1), so this re-checks the DB. Mount after requireAuth, before route logic.
+// Blocks protected routes until a provisioned account changes its temp password.
+// The flag is re-checked from the DB, not the JWT (payload stays minimal, spec 9.1).
+// Mount after requireAuth.
 export async function blockIfPasswordChangeRequired(req: Request, res: Response, next: NextFunction) {
   if (!req.user) {
     return res.status(401).json({ error: "Authentication required" });

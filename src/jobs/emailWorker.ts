@@ -4,9 +4,8 @@ import { prisma } from "../config/database";
 import { env } from "../config/env";
 import { CredentialEmailJob, EMAIL_QUEUE_NAME, queueConnection } from "./emailQueue";
 
-// Real SMTP when configured; otherwise jsonTransport "sends" by serializing
-// the message (we log it), so the whole pipeline runs in dev without a mail
-// server. Pilot switch-over is purely env vars.
+// Real SMTP when configured; otherwise jsonTransport (logged, not sent) so the
+// pipeline runs in dev without a mail server. Pilot switch-over is env vars only.
 function buildTransport() {
   if (env.SMTP_HOST && env.SMTP_PORT) {
     return nodemailer.createTransport({
@@ -42,8 +41,7 @@ async function processCredentialEmail(job: Job<CredentialEmailJob>) {
   });
 
   if (!env.SMTP_HOST) {
-    // jsonTransport puts the serialized mail on .message; the generic
-    // SentMessageInfo type doesn't know that, hence the narrow cast.
+    // jsonTransport puts the serialized mail on .message (not in the base type).
     const devPreview = (info as { message?: string }).message;
     console.log(`[email:dev] credential mail for ${to}:`, devPreview ?? info.messageId);
   }
@@ -59,8 +57,7 @@ export function startEmailWorker(): Worker<CredentialEmailJob> {
     connection: queueConnection,
   });
 
-  // Runs only after ALL retry attempts are exhausted — transient SMTP errors
-  // are retried with backoff before we flag the delivery for admin review.
+  // Flag delivery as failed only after all retry attempts are exhausted.
   worker.on("failed", async (job, err) => {
     if (!job || job.attemptsMade < (job.opts.attempts ?? 1)) return;
     console.error(`[email] delivery permanently failed for job ${job.id}:`, err.message);

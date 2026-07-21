@@ -11,9 +11,8 @@ async function loadStudent(userId: string) {
   return student;
 }
 
-// A student may belong to at most one ACCEPTED group per CPI (spec Step 4).
-// Prisma can't express this as a single unique constraint (it spans groups of
-// the same CPI), so it's enforced here on every create/accept.
+// At most one ACCEPTED group per student per CPI (spec Step 4). Not expressible
+// as a Prisma unique constraint, so enforced here on every create/accept.
 async function assertNotInAnotherGroup(studentId: string, cpiId: string, exceptGroupId?: string) {
   const existing = await prisma.groupMember.findFirst({
     where: {
@@ -181,9 +180,8 @@ async function groupDetail(groupId: string) {
   });
 }
 
-// A group is "locked" once the STUDENT_REGISTRATION window has closed
-// (spec Step 4). No stored flag — derived from the timeline, since
-// phase-gating already blocks mutations after the window.
+// A group is "locked" once STUDENT_REGISTRATION closes (spec Step 4) — derived
+// from the timeline, not a stored flag (phase-gating already blocks mutations).
 async function isRegistrationClosed(cpiId: string): Promise<boolean> {
   const window = await prisma.cpiTimeline.findUnique({
     where: { courseInstanceId_phase: { courseInstanceId: cpiId, phase: CpiPhase.STUDENT_REGISTRATION } },

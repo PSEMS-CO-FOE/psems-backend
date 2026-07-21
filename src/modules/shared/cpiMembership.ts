@@ -1,10 +1,8 @@
 import { InvitationStatus } from "@prisma/client";
 import { prisma } from "../../config/database";
 
-// Shared "what is this user, relative to this CPI" lookups. Used wherever an
-// action's authorization depends on CPI-scoped membership (ideas, selection)
-// rather than the coarse account role. Return null instead of throwing so
-// callers can branch on capacity.
+// CPI-scoped membership lookups — authorization by capacity rather than account
+// role. Return null (not throw) so callers can branch.
 
 // The id of the student's ACCEPTED group in this CPI, or null.
 export async function getStudentGroupId(userId: string, cpiId: string): Promise<string | null> {

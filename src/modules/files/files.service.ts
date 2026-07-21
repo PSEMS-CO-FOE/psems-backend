@@ -13,11 +13,9 @@ export interface UploadedFile {
   mimeType: string;
 }
 
-// A group member uploads a file for a stage that requires a submission.
-// SOFT deadline (spec 3.3 Step 9): once the submission window has opened, a
-// late upload is accepted and flagged rather than rejected — the coordinator
-// sees `isLate`. (Hard phase-gating would make late submission impossible,
-// which contradicts "late submissions flagged".)
+// A group member uploads a file for a submission stage. SOFT deadline (spec 3.3
+// Step 9): once the window opens, a late upload is accepted and flagged (isLate)
+// rather than rejected — so this is not hard phase-gated.
 export async function submitProposal(userId: string, cpiId: string, stageId: string, file: UploadedFile) {
   const groupId = await getStudentGroupId(userId, cpiId);
   if (!groupId) throw new AuthError(403, "Only a member of a group in this CPI can submit");

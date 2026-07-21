@@ -206,9 +206,8 @@ export async function setHeadJudge(coordinatorUserId: string, cpiId: string, lec
 
 // --- internal helpers ---
 
-// CPI-scope enforcement (spec 9.2 DB layer): a coordinator may only touch CPIs
-// they own. 404 for non-existent, 403 for someone else's. Exported for reuse
-// by other CPI-scoped modules (e.g. idea approval).
+// CPI-scope enforcement (spec 9.2): a coordinator may only touch CPIs they own —
+// 404 if non-existent, 403 if someone else's. Reused by other CPI-scoped modules.
 export async function loadOwnedCpi(coordinatorUserId: string, cpiId: string): Promise<CourseInstance> {
   await assertRole(coordinatorUserId, Role.COURSE_COORDINATOR);
   const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
@@ -242,8 +241,7 @@ function validateTimeline(input: SetTimelineInput) {
       throw new AuthError(400, `${p.phase}: startDate must be before endDate`);
     }
   }
-  // Starts must be non-decreasing in canonical phase order — catches an
-  // out-of-sequence timeline (e.g. selection scheduled before registration).
+  // Starts must be non-decreasing in canonical phase order (catches out-of-sequence phases).
   const byPhase = new Map(input.phases.map((p) => [p.phase, p]));
   for (let i = 1; i < PHASE_ORDER.length; i++) {
     const prev = byPhase.get(PHASE_ORDER[i - 1])!;

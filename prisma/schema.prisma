@@ -62,12 +62,10 @@ enum IdeaAuthorType {
   STUDENT
 }
 
-// Denormalized visibility class, set deterministically from author type at
-// creation. PUBLIC_TO_STUDENTS = every student in the CPI may see it
-// (supervisor/coordinator-posted); GROUP_RESTRICTED = only the author's own
-// group, plus supervisors/coordinator (student-posted). The actual access
-// check is done per-requester in the list query — this column is a readable
-// label + a hook for the Week 9 ML/similarity layer.
+// Visibility class, set from author type at creation. PUBLIC_TO_STUDENTS =
+// every student may see it; GROUP_RESTRICTED = only the author's group (plus
+// supervisors/coordinator). The real access check is per-requester in the list
+// query — this is a readable label.
 enum IdeaVisibility {
   PUBLIC_TO_STUDENTS
   GROUP_RESTRICTED
@@ -228,10 +226,8 @@ model CpiSupervisor {
   @@map("cpi_supervisors")
 }
 
-// The evaluator pool for a CPI plus which one is Head Judge (spec 3.3 Step 3 /
-// table cpi_evaluators). Exists in BOTH modes — evaluation happens regardless
-// of whether the CPI is supervisor-led. Exactly one row may have
-// isHeadJudge=true per CPI (enforced in the service layer).
+// The CPI's evaluator pool + which one is Head Judge (spec 3.3 Step 3). Exists
+// in both modes. Exactly one isHeadJudge=true per CPI (enforced in the service).
 model CpiEvaluator {
   id               String   @id @default(uuid())
   courseInstanceId String   @map("course_instance_id")
@@ -247,10 +243,8 @@ model CpiEvaluator {
   @@map("cpi_evaluators")
 }
 
-// A student project group within a CPI (spec 3.3 Step 4 / table groups). Groups
-// are mutated only during the STUDENT_REGISTRATION phase; once that window
-// closes they are effectively locked (enforced by phase-gating, so no stored
-// lock flag — "locked" is derived from the timeline).
+// A student project group within a CPI (spec 3.3 Step 4). Mutable only during
+// STUDENT_REGISTRATION; "locked" afterward is derived from the timeline, not stored.
 model Group {
   id               String   @id @default(uuid())
   courseInstanceId String   @map("course_instance_id")
@@ -271,11 +265,9 @@ model Group {
   @@map("groups")
 }
 
-// Group membership + the invite/accept flow in one table (spec table
-// group_members). Leader's own row is ACCEPTED at creation; invitees start
-// PENDING and flip to ACCEPTED/DECLINED. "One accepted group per student per
-// CPI" is enforced in the service layer (needs a cross-group check Prisma
-// can't express as a single unique constraint).
+// Group membership + invite/accept flow (spec table group_members). Leader's row
+// is ACCEPTED at creation; invitees start PENDING. "One accepted group per
+// student per CPI" is enforced in the service layer.
 model GroupMember {
   id        String           @id @default(uuid())
   groupId   String           @map("group_id")
@@ -292,13 +284,10 @@ model GroupMember {
   @@map("group_members")
 }
 
-// A project idea posted during Idea Announcement (spec 3.3 Step 5 / table
-// project_ideas). Exactly one author linkage is populated per authorType:
-//   SUPERVISOR / COORDINATOR -> authorUserId only (posted by that lecturer)
-//   STUDENT                  -> authorUserId (who posted) + groupId (whose idea)
-// visibility is derived from authorType at creation; approvalStatus is only
-// set for STUDENT ideas in Coordinator-Managed mode. similarityFlag is a
-// placeholder for the Week 9 ML plagiarism/similarity check.
+// A project idea (spec 3.3 Step 5). Author linkage by authorType: SUPERVISOR/
+// COORDINATOR set authorUserId only; STUDENT sets authorUserId + groupId.
+// approvalStatus is only set for STUDENT ideas in Coordinator-Managed mode.
+// similarityFlag is a placeholder for the Week 9 ML similarity check.
 model ProjectIdea {
   id               String              @id @default(uuid())
   courseInstanceId String              @map("course_instance_id")
