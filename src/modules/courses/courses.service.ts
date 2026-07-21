@@ -9,6 +9,7 @@ import {
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { assertRole } from "../shared/authorization";
+import { notify } from "../notifications/notifications.service";
 import { CreateCpiInput, SetTimelineInput } from "./courses.schemas";
 
 // Canonical phase order (spec 3.3 Step 2). Used to validate that a submitted
@@ -112,6 +113,14 @@ export async function inviteSupervisor(coordinatorUserId: string, cpiId: string,
       data: { mode: CpiMode.SUPERVISOR_LED },
     }),
   ]);
+
+  await notify(lecturerUserId, {
+    type: "SUPERVISOR_INVITED",
+    title: "Supervisor invitation",
+    body: `You have been invited to supervise in "${cpi.name}".`,
+    courseInstanceId: cpiId,
+    email: true,
+  });
 
   return supervisor;
 }

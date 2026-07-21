@@ -2,6 +2,7 @@ import { HeadJudgeDecision, RubricScoreStatus, SessionStatus } from "@prisma/cli
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { getCpiEvaluatorId, getHeadJudgeCpiEvaluatorId } from "../shared/cpiMembership";
+import { notify } from "../notifications/notifications.service";
 
 async function assertHeadJudge(userId: string, cpiId: string): Promise<string> {
   const hjId = await getHeadJudgeCpiEvaluatorId(userId, cpiId);
@@ -84,6 +85,14 @@ export async function approve(userId: string, cpiId: string, sessionId: string) 
     }),
   ]);
 
+  const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId }, select: { createdById: true } });
+  await notify(cpi!.createdById, {
+    type: "SCORES_FINALIZED",
+    title: "Scores finalized",
+    body: "The Head Judge approved an evaluation session; its marks are finalized.",
+    courseInstanceId: cpiId,
+  });
+
   return prisma.headJudgeReview.findUnique({ where: { evaluationSessionId: sessionId } });
 }
 
@@ -122,6 +131,14 @@ export async function requestCorrection(
       },
     }),
   ]);
+
+  await notify(evaluatorUserId, {
+    type: "CORRECTION_REQUESTED",
+    title: "Score correction requested",
+    body: `The Head Judge asked you to revise your scores. Reason: ${reason}`,
+    courseInstanceId: cpiId,
+    email: true,
+  });
 
   return prisma.headJudgeReview.findUnique({ where: { evaluationSessionId: sessionId } });
 }

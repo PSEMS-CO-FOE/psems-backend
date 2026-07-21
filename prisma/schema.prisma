@@ -157,6 +157,7 @@ model User {
   auditLogs         AuditLog[]
   provisioningLogs  StudentProvisioningLog[]
   postedIdeas       ProjectIdea[]
+  notifications     Notification[]
 
   @@map("users")
 }
@@ -208,6 +209,7 @@ model CourseInstance {
   academicYear          String               @map("academic_year")
   mode                  CpiMode?
   allocationsFinalizedAt DateTime?           @map("allocations_finalized_at")
+  marksPublishedAt      DateTime?            @map("marks_published_at")
   createdById           String               @map("created_by_id")
   createdAt             DateTime             @default(now()) @map("created_at")
 
@@ -224,6 +226,7 @@ model CourseInstance {
   submissions         Submission[]
   availability        EvaluatorAvailability[]
   evaluationSessions  EvaluationSession[]
+  finalMarks          FinalMark[]
 
   @@map("course_instances")
 }
@@ -283,6 +286,7 @@ model Group {
   allocation          ProjectAllocation?
   submissions         Submission[]
   evaluationSessions  EvaluationSession[]
+  finalMarks          FinalMark[]
 
   @@index([courseInstanceId])
   @@map("groups")
@@ -430,6 +434,7 @@ model EvaluationStage {
   evaluators     StageEvaluator[]
   submissions    Submission[]
   sessions       EvaluationSession[]
+  finalMarks     FinalMark[]
 
   @@index([courseInstanceId])
   @@map("evaluation_stages")
@@ -633,4 +638,45 @@ model StudentProvisioningLog {
   @@index([batchId])
   @@index([deliveryStatus])
   @@map("student_provisioning_log")
+}
+
+// Aggregated mark per group per stage (spec 3.3 Step 11 / table final_marks).
+// stageScorePercent is the stage's 0–100 result; weightedContribution applies
+// the stage weight. Overall = sum of weightedContribution per group.
+model FinalMark {
+  id                   String   @id @default(uuid())
+  courseInstanceId     String   @map("course_instance_id")
+  groupId              String   @map("group_id")
+  evaluationStageId    String   @map("evaluation_stage_id")
+  stageScorePercent    Float    @map("stage_score_percent")
+  weightedContribution Float    @map("weighted_contribution")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  courseInstance CourseInstance  @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  group          Group           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  stage          EvaluationStage @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, evaluationStageId])
+  @@index([courseInstanceId])
+  @@map("final_marks")
+}
+
+// In-app notification (spec Section 10 / table notifications). type is an event
+// key (e.g. "MARKS_PUBLISHED"); email delivery, when requested, goes through the
+// shared email queue. readAt null = unread.
+model Notification {
+  id               String    @id @default(uuid())
+  recipientUserId  String    @map("recipient_user_id")
+  type             String
+  title            String
+  body             String
+  courseInstanceId String?   @map("course_instance_id")
+  readAt           DateTime? @map("read_at")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  recipient User @relation(fields: [recipientUserId], references: [id], onDelete: Cascade)
+
+  @@index([recipientUserId, readAt])
+  @@map("notifications")
 }

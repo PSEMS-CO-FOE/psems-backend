@@ -2,6 +2,7 @@ import { AllocationSource, CourseInstance, SelectionStatus } from "@prisma/clien
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
+import { notifyMany } from "../notifications/notifications.service";
 import { getAcceptedSupervisorLecturerId } from "../shared/cpiMembership";
 
 function assertNotFinalized(cpi: CourseInstance) {
@@ -103,9 +104,31 @@ export async function overrideAllocation(
 export async function finalizeAllocations(coordinatorUserId: string, cpiId: string) {
   const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
   assertNotFinalized(cpi);
-  return prisma.courseInstance.update({
+  const updated = await prisma.courseInstance.update({
     where: { id: cpiId },
     data: { allocationsFinalizedAt: new Date() },
     select: { id: true, allocationsFinalizedAt: true },
   });
+
+  // Notify every allocated group's members and their supervisor (spec Step 7).
+  const allocations = await prisma.projectAllocation.findMany({
+    where: { courseInstanceId: cpiId },
+    include: {
+      group: { include: { members: { where: { status: "ACCEPTED" }, include: { student: true } } } },
+      supervisor: true,
+    },
+  });
+  const recipients: string[] = [];
+  for (const a of allocations) {
+    recipients.push(...a.group.members.map((m) => m.student.userId));
+    if (a.supervisor) recipients.push(a.supervisor.userId);
+  }
+  await notifyMany(recipients, {
+    type: "ALLOCATION_FINALIZED",
+    title: "Project allocation finalized",
+    body: `Project allocations for "${cpi.name}" are final.`,
+    courseInstanceId: cpiId,
+  });
+
+  return updated;
 }

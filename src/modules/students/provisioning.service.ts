@@ -114,6 +114,7 @@ export async function bulkProvisionStudents(
   await Promise.all(
     createdUsers.map((user, i) =>
       emailQueue.add("credential-email", {
+        kind: "credential",
         to: user.email,
         fullName: user.fullName,
         tempPassword: prepared[i].tempPassword,

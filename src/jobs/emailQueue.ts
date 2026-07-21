@@ -10,19 +10,22 @@ export const queueConnection = new IORedis(env.REDIS_URL, {
 
 export const EMAIL_QUEUE_NAME = "email";
 
-export interface CredentialEmailJob {
-  to: string;
-  fullName: string;
-  tempPassword: string;
-  provisioningLogId: string;
-}
+// Discriminated union so one queue/worker handles both provisioning credentials
+// and generic notification emails.
+export type EmailJob =
+  | { kind: "credential"; to: string; fullName: string; tempPassword: string; provisioningLogId: string }
+  | { kind: "notification"; to: string; subject: string; text: string };
 
-export const emailQueue = new Queue<CredentialEmailJob>(EMAIL_QUEUE_NAME, {
+export const emailQueue = new Queue<EmailJob>(EMAIL_QUEUE_NAME, {
   connection: queueConnection,
   defaultJobOptions: {
     attempts: 3,
     backoff: { type: "exponential", delay: 1000 },
-    removeOnComplete: { count: 1000 }, // keep last 1000 for inspection, don't grow Redis forever
-    removeOnFail: false, // failed jobs stay visible until manually cleared
+    removeOnComplete: { count: 1000 },
+    removeOnFail: false,
   },
 });
+
+export function enqueueNotificationEmail(to: string, subject: string, text: string) {
+  return emailQueue.add("notification-email", { kind: "notification", to, subject, text });
+}
