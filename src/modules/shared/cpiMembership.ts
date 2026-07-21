@@ -34,3 +34,13 @@ export async function getCpiEvaluatorId(userId: string, cpiId: string): Promise<
   });
   return evaluator?.id ?? null;
 }
+
+// The CpiEvaluator row id if this user is the CPI's Head Judge, or null.
+export async function getHeadJudgeCpiEvaluatorId(userId: string, cpiId: string): Promise<string | null> {
+  const lecturer = await prisma.lecturer.findUnique({ where: { userId } });
+  if (!lecturer) return null;
+  const evaluator = await prisma.cpiEvaluator.findUnique({
+    where: { courseInstanceId_lecturerId: { courseInstanceId: cpiId, lecturerId: lecturer.id } },
+  });
+  return evaluator?.isHeadJudge ? evaluator.id : null;
+}
