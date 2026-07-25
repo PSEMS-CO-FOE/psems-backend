@@ -50,14 +50,33 @@ export async function listOwnedCpis(coordinatorUserId: string) {
   });
 }
 
+// Basic, non-sensitive CPI info for any authenticated participant to display
+// (e.g. the course name in a header instead of its id).
+export async function getCpiSummary(cpiId: string) {
+  const cpi = await prisma.courseInstance.findUnique({
+    where: { id: cpiId },
+    select: {
+      id: true,
+      name: true,
+      department: true,
+      academicYear: true,
+      projectType: true,
+      participationMode: true,
+      mode: true,
+    },
+  });
+  if (!cpi) throw new AuthError(404, "CPI not found");
+  return cpi;
+}
+
 export async function getCpiDetail(coordinatorUserId: string, cpiId: string) {
   await loadOwnedCpi(coordinatorUserId, cpiId);
   return prisma.courseInstance.findUnique({
     where: { id: cpiId },
     include: {
       timeline: { orderBy: { startDate: "asc" } },
-      supervisors: { include: { lecturer: { include: { user: { select: { email: true, fullName: true } } } } } },
-      evaluators: { include: { lecturer: { include: { user: { select: { email: true, fullName: true } } } } } },
+      supervisors: { include: { lecturer: { include: { user: { select: { id: true, email: true, fullName: true } } } } } },
+      evaluators: { include: { lecturer: { include: { user: { select: { id: true, email: true, fullName: true } } } } } },
     },
   });
 }
@@ -123,6 +142,83 @@ export async function inviteSupervisor(coordinatorUserId: string, cpiId: string,
   });
 
   return supervisor;
+}
+
+// CPIs a student can open: those in their department, plus any they've joined.
+export async function listStudentCpis(userId: string) {
+  const student = await prisma.student.findUnique({ where: { userId } });
+  if (!student) return [];
+
+  const memberships = await prisma.groupMember.findMany({
+    where: { studentId: student.id },
+    select: { group: { select: { courseInstanceId: true } } },
+  });
+  const membershipCpiIds = memberships.map((m) => m.group.courseInstanceId);
+
+  return prisma.courseInstance.findMany({
+    where: {
+      OR: [{ department: student.department }, { id: { in: membershipCpiIds } }],
+    },
+    select: {
+      id: true,
+      name: true,
+      department: true,
+      academicYear: true,
+      projectType: true,
+    },
+    orderBy: { createdAt: "desc" },
+  });
+}
+
+// CPIs a lecturer can open (accepted supervisor and/or evaluator/Head Judge),
+// with their role(s) in each.
+export async function listLecturerCpis(userId: string) {
+  const lecturer = await prisma.lecturer.findUnique({ where: { userId } });
+  if (!lecturer) return [];
+
+  const cpiSelect = { id: true, name: true, department: true, academicYear: true } as const;
+  const [supervisorRoles, evaluatorRoles] = await Promise.all([
+    prisma.cpiSupervisor.findMany({
+      where: { lecturerId: lecturer.id, invitationStatus: InvitationStatus.ACCEPTED },
+      include: { courseInstance: { select: cpiSelect } },
+    }),
+    prisma.cpiEvaluator.findMany({
+      where: { lecturerId: lecturer.id },
+      include: { courseInstance: { select: cpiSelect } },
+    }),
+  ]);
+
+  const byId = new Map<string, { id: string; name: string; department: string; academicYear: string; roles: string[] }>();
+  const add = (cpi: { id: string; name: string; department: string; academicYear: string }, role: string) => {
+    const existing = byId.get(cpi.id);
+    if (existing) {
+      if (!existing.roles.includes(role)) existing.roles.push(role);
+    } else {
+      byId.set(cpi.id, { ...cpi, roles: [role] });
+    }
+  };
+  for (const s of supervisorRoles) add(s.courseInstance, "Supervisor");
+  for (const e of evaluatorRoles) add(e.courseInstance, e.isHeadJudge ? "Head Judge" : "Evaluator");
+
+  return [...byId.values()];
+}
+
+// A lecturer's own PENDING supervisor invitations.
+export async function listMySupervisorInvites(lecturerUserId: string) {
+  const lecturer = await prisma.lecturer.findUnique({ where: { userId: lecturerUserId } });
+  if (!lecturer) return [];
+  const invites = await prisma.cpiSupervisor.findMany({
+    where: { lecturerId: lecturer.id, invitationStatus: InvitationStatus.PENDING },
+    include: {
+      courseInstance: { select: { id: true, name: true, department: true, academicYear: true } },
+    },
+    orderBy: { invitedAt: "desc" },
+  });
+  return invites.map((i) => ({
+    cpiId: i.courseInstanceId,
+    invitedAt: i.invitedAt,
+    courseInstance: i.courseInstance,
+  }));
 }
 
 export async function respondToSupervisorInvite(
@@ -242,21 +338,23 @@ async function loadApprovedLecturer(lecturerUserId: string) {
 
 function validateTimeline(input: SetTimelineInput) {
   const seen = new Set(input.phases.map((p) => p.phase));
-  if (seen.size !== PHASE_ORDER.length) {
-    throw new AuthError(400, "Timeline must define each of the 10 phases exactly once");
+  if (seen.size !== input.phases.length) {
+    throw new AuthError(400, "Each phase may be defined at most once");
   }
   for (const p of input.phases) {
     if (p.startDate >= p.endDate) {
       throw new AuthError(400, `${p.phase}: startDate must be before endDate`);
     }
   }
-  // Starts must be non-decreasing in canonical phase order (catches out-of-sequence phases).
+  // Among the phases provided (any subset), starts must be non-decreasing in
+  // canonical order — catches out-of-sequence scheduling.
+  const included = PHASE_ORDER.filter((phase) => seen.has(phase));
   const byPhase = new Map(input.phases.map((p) => [p.phase, p]));
-  for (let i = 1; i < PHASE_ORDER.length; i++) {
-    const prev = byPhase.get(PHASE_ORDER[i - 1])!;
-    const curr = byPhase.get(PHASE_ORDER[i])!;
+  for (let i = 1; i < included.length; i++) {
+    const prev = byPhase.get(included[i - 1])!;
+    const curr = byPhase.get(included[i])!;
     if (curr.startDate < prev.startDate) {
-      throw new AuthError(400, `${PHASE_ORDER[i]} cannot start before ${PHASE_ORDER[i - 1]}`);
+      throw new AuthError(400, `${included[i]} cannot start before ${included[i - 1]}`);
     }
   }
 }

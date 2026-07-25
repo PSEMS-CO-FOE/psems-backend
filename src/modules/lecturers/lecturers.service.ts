@@ -40,6 +40,22 @@ export async function registerLecturer(input: RegisterLecturerInput) {
   };
 }
 
+// Approved lecturers, for coordinator assignment pickers (replaces raw
+// userId pasting). Returns the userId, since assignment endpoints take
+// `lecturerUserId`. Any authenticated coordinator may browse the pool.
+export async function listApprovedLecturers() {
+  const lecturers = await prisma.lecturer.findMany({
+    where: { approvalStatus: LecturerApprovalStatus.APPROVED },
+    select: { user: { select: { id: true, email: true, fullName: true } } },
+    orderBy: { user: { fullName: "asc" } },
+  });
+  return lecturers.map((l) => ({
+    userId: l.user.id,
+    email: l.user.email,
+    fullName: l.user.fullName,
+  }));
+}
+
 export async function listPendingLecturers(actorUserId: string) {
   await assertRole(actorUserId, Role.SYSTEM_ADMIN);
   return prisma.lecturer.findMany({

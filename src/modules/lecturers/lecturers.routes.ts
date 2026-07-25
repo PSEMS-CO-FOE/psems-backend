@@ -4,7 +4,12 @@ import { requireAuth } from "../../middleware/auth";
 import { blockIfPasswordChangeRequired } from "../../middleware/forcePasswordChange";
 import { requireRole } from "../../middleware/role";
 import { registerLecturerSchema } from "./lecturers.schemas";
-import { decideLecturer, listPendingLecturers, registerLecturer } from "./lecturers.service";
+import {
+  decideLecturer,
+  listApprovedLecturers,
+  listPendingLecturers,
+  registerLecturer,
+} from "./lecturers.service";
 
 export const lecturersRouter = Router();
 
@@ -22,6 +27,22 @@ lecturersRouter.post("/register", async (req, res, next) => {
     return next(err);
   }
 });
+
+// Coordinators browse the approved pool to pick supervisors/evaluators/HJ by
+// name instead of pasting a raw userId.
+lecturersRouter.get(
+  "/approved",
+  requireAuth,
+  blockIfPasswordChangeRequired,
+  requireRole(Role.COURSE_COORDINATOR),
+  async (_req, res, next) => {
+    try {
+      return res.json(await listApprovedLecturers());
+    } catch (err) {
+      return next(err);
+    }
+  },
+);
 
 const adminOnly = [requireAuth, blockIfPasswordChangeRequired, requireRole(Role.SYSTEM_ADMIN)];
 

@@ -44,10 +44,19 @@ groupsRouter.post("/:groupId/respond", ...studentAuthed, inRegistration, async (
   }
 });
 
-// Reads are not phase-gated. /mine must precede /:groupId so it isn't captured.
+// Reads are not phase-gated. /mine and /invites must precede /:groupId so they
+// aren't captured as a groupId.
 groupsRouter.get("/mine", ...studentAuthed, async (req, res, next) => {
   try {
     return res.json(await groups.getMyGroup(req.user!.user_id, req.params.cpiId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+groupsRouter.get("/invites", ...studentAuthed, async (req, res, next) => {
+  try {
+    return res.json(await groups.listMyPendingInvites(req.user!.user_id, req.params.cpiId));
   } catch (err) {
     return next(err);
   }

@@ -40,6 +40,45 @@ coursesRouter.get("/", ...coordinatorOnly, async (req, res, next) => {
   }
 });
 
+// A lecturer's own pending supervisor invites. Identity-based (not coordinator-
+// scoped), and defined BEFORE "/:cpiId" so "supervisor-invites" isn't captured
+// as a cpiId. Not phase-gated — a lecturer can view invites at any time.
+coursesRouter.get("/supervisor-invites/mine", ...authed, async (req, res, next) => {
+  try {
+    return res.json(await courses.listMySupervisorInvites(req.user!.user_id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// CPI discovery so students/lecturers never paste a CPI id. Two segments each,
+// defined BEFORE "/:cpiId" so they aren't captured as a cpiId. Identity-based.
+coursesRouter.get("/mine/student", ...authed, async (req, res, next) => {
+  try {
+    return res.json(await courses.listStudentCpis(req.user!.user_id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+coursesRouter.get("/mine/lecturer", ...authed, async (req, res, next) => {
+  try {
+    return res.json(await courses.listLecturerCpis(req.user!.user_id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Non-sensitive summary for any authenticated participant (name for headers,
+// etc.). Defined before "/:cpiId" so "summary" isn't read as a phase action.
+coursesRouter.get("/:cpiId/summary", ...authed, async (req, res, next) => {
+  try {
+    return res.json(await courses.getCpiSummary(req.params.cpiId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 coursesRouter.get("/:cpiId", ...coordinatorOnly, async (req, res, next) => {
   try {
     return res.json(await courses.getCpiDetail(req.user!.user_id, req.params.cpiId));

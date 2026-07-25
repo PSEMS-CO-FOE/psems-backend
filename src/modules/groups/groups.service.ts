@@ -1,6 +1,7 @@
 import { CpiPhase, InvitationStatus } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
+import { notify } from "../notifications/notifications.service";
 
 // Resolves the Student profile for a user, or 403 if they aren't a student.
 async function loadStudent(userId: string) {
@@ -77,15 +78,24 @@ export async function inviteMember(leaderUserId: string, cpiId: string, groupId:
   }
 
   // A previously-declined invite can be re-sent (reset to PENDING).
-  if (existing) {
-    return prisma.groupMember.update({
-      where: { id: existing.id },
-      data: { status: InvitationStatus.PENDING, invitedAt: new Date(), joinedAt: null },
-    });
-  }
-  return prisma.groupMember.create({
-    data: { groupId, studentId: inviteeUser.student.id, status: InvitationStatus.PENDING },
+  const membership = existing
+    ? await prisma.groupMember.update({
+        where: { id: existing.id },
+        data: { status: InvitationStatus.PENDING, invitedAt: new Date(), joinedAt: null },
+      })
+    : await prisma.groupMember.create({
+        data: { groupId, studentId: inviteeUser.student.id, status: InvitationStatus.PENDING },
+      });
+
+  await notify(inviteeUser.id, {
+    type: "GROUP_INVITE",
+    title: "Group invitation",
+    body: `You've been invited to join the group "${group.name}".`,
+    courseInstanceId: cpiId,
+    email: true,
   });
+
+  return membership;
 }
 
 export async function respondToInvite(
@@ -121,6 +131,33 @@ export async function respondToInvite(
     where: { id: membership.id },
     data: { status: InvitationStatus.ACCEPTED, joinedAt: new Date() },
   });
+}
+
+// A student's own PENDING group invitations in this CPI.
+export async function listMyPendingInvites(userId: string, cpiId: string) {
+  const student = await loadStudent(userId);
+  const invites = await prisma.groupMember.findMany({
+    where: {
+      studentId: student.id,
+      status: InvitationStatus.PENDING,
+      group: { courseInstanceId: cpiId },
+    },
+    include: {
+      group: {
+        select: {
+          id: true,
+          name: true,
+          leader: { select: { user: { select: { email: true, fullName: true } } } },
+        },
+      },
+    },
+    orderBy: { invitedAt: "desc" },
+  });
+  return invites.map((i) => ({
+    groupId: i.groupId,
+    invitedAt: i.invitedAt,
+    group: { id: i.group.id, name: i.group.name, leader: i.group.leader.user },
+  }));
 }
 
 export async function getMyGroup(userId: string, cpiId: string) {
