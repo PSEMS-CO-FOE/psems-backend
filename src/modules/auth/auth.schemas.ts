@@ -15,7 +15,8 @@ export const loginSchema = z.object({
 });
 
 export const changePasswordSchema = z.object({
-  currentPassword: z.string().min(1),
+  // Optional: not required for the forced first-login change (enforced in the service for voluntary changes).
+  currentPassword: z.string().optional(),
   newPassword: passwordPolicySchema,
 });
 

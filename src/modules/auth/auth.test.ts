@@ -63,10 +63,11 @@ describe("Week 1 acceptance: login + forced first-login password change", () => 
     expect(blockedRes.status).toBe(403);
     expect(blockedRes.body.code).toBe("FORCE_PASSWORD_CHANGE");
 
+    // Forced first-login change does NOT require the current password.
     const changeRes = await request(app)
       .post("/auth/change-password")
       .set("Authorization", `Bearer ${firstAccessToken}`)
-      .send({ currentPassword: STUDENT_TEMP_PASSWORD, newPassword: STUDENT_NEW_PASSWORD });
+      .send({ newPassword: STUDENT_NEW_PASSWORD });
     expect(changeRes.status).toBe(200);
 
     const secondLoginRes = await request(app)
@@ -79,6 +80,19 @@ describe("Week 1 acceptance: login + forced first-login password change", () => 
       .get("/users/me")
       .set("Authorization", `Bearer ${secondLoginRes.body.accessToken}`);
     expect(allowedRes.status).toBe(200);
+
+    // A later VOLUNTARY change still requires the current password.
+    const token = secondLoginRes.body.accessToken as string;
+    await request(app)
+      .post("/auth/change-password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ newPassword: "AnotherPass#99" })
+      .expect(400);
+    await request(app)
+      .post("/auth/change-password")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ currentPassword: "wrong-password", newPassword: "AnotherPass#99" })
+      .expect(401);
   });
 
   it("standard-created accounts (e.g. Admin) are never forced to change password", async () => {

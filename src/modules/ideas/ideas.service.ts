@@ -2,6 +2,7 @@ import { CpiMode, IdeaApprovalStatus, IdeaAuthorType, IdeaVisibility } from "@pr
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
+import { notifyMany } from "../notifications/notifications.service";
 import { getAcceptedSupervisorLecturerId, getStudentGroupId } from "../shared/cpiMembership";
 
 // Post an idea (spec 3.3 Step 5). Single endpoint that branches on the actor's
@@ -88,6 +89,74 @@ export async function listIdeas(userId: string, cpiId: string) {
       group: { select: { id: true, name: true } },
     },
   });
+}
+
+// A student edits their group's own idea and resubmits it. Allowed while the
+// idea hasn't been approved/rejected; resubmitting clears any revision request
+// and, in Coordinator-Managed, returns the idea to PENDING for re-review.
+export async function updateIdea(userId: string, cpiId: string, ideaId: string, title: string, description: string) {
+  const groupId = await getStudentGroupId(userId, cpiId);
+  if (!groupId) throw new AuthError(403, "Only a group member can edit an idea");
+
+  const idea = await prisma.projectIdea.findUnique({ where: { id: ideaId } });
+  if (!idea || idea.courseInstanceId !== cpiId) throw new AuthError(404, "Idea not found in this CPI");
+  if (idea.authorType !== IdeaAuthorType.STUDENT || idea.groupId !== groupId) {
+    throw new AuthError(403, "You can only edit your own group's idea");
+  }
+  if (idea.approvalStatus === IdeaApprovalStatus.APPROVED || idea.approvalStatus === IdeaApprovalStatus.REJECTED) {
+    throw new AuthError(409, `This idea is already ${idea.approvalStatus.toLowerCase()} and can't be edited`);
+  }
+
+  const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
+  return prisma.projectIdea.update({
+    where: { id: ideaId },
+    data: {
+      title,
+      description,
+      revisionNote: null,
+      approvalStatus: cpi!.mode === CpiMode.COORDINATOR_MANAGED ? IdeaApprovalStatus.PENDING : null,
+    },
+  });
+}
+
+// A coordinator or an accepted supervisor asks a group to revise their idea,
+// with a note. The group can then edit and resubmit within the posting phase.
+export async function requestIdeaRevision(userId: string, cpiId: string, ideaId: string, note: string) {
+  const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
+  if (!cpi) throw new AuthError(404, "CPI not found");
+
+  const isCoordinator = cpi.createdById === userId;
+  const isSupervisor = Boolean(await getAcceptedSupervisorLecturerId(userId, cpiId));
+  if (!isCoordinator && !isSupervisor) {
+    throw new AuthError(403, "Only the coordinator or a supervisor can request a revision");
+  }
+
+  const idea = await prisma.projectIdea.findUnique({ where: { id: ideaId } });
+  if (!idea || idea.courseInstanceId !== cpiId) throw new AuthError(404, "Idea not found in this CPI");
+  if (idea.authorType !== IdeaAuthorType.STUDENT) throw new AuthError(400, "Only student ideas can be sent back for revision");
+
+  const updated = await prisma.projectIdea.update({
+    where: { id: ideaId },
+    data: { approvalStatus: IdeaApprovalStatus.REVISION_REQUESTED, revisionNote: note },
+  });
+
+  if (idea.groupId) {
+    const members = await prisma.groupMember.findMany({
+      where: { groupId: idea.groupId, status: "ACCEPTED" },
+      include: { student: true },
+    });
+    await notifyMany(
+      members.map((m) => m.student.userId),
+      {
+        type: "IDEA_REVISION_REQUESTED",
+        title: "Idea revision requested",
+        body: `Your idea "${idea.title}" needs changes: ${note}`,
+        courseInstanceId: cpiId,
+      },
+    );
+  }
+
+  return updated;
 }
 
 // Coordinator accepts/rejects a student idea — Coordinator-Managed only.

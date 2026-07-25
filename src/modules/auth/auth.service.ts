@@ -47,15 +47,23 @@ export async function login(email: string, password: string) {
   };
 }
 
-export async function changePassword(userId: string, currentPassword: string, newPassword: string) {
+export async function changePassword(userId: string, currentPassword: string | undefined, newPassword: string) {
   const user = await prisma.user.findUnique({ where: { id: userId } });
   if (!user) {
     throw new AuthError(401, "User no longer exists");
   }
 
-  const passwordMatches = await bcrypt.compare(currentPassword, user.passwordHash);
-  if (!passwordMatches) {
-    throw new AuthError(401, "Current password is incorrect");
+  // The forced first-login change IS the mandatory reset — the user just proved
+  // the current password by logging in seconds ago, so don't re-ask. Any later
+  // voluntary change still requires it.
+  if (!user.forcePasswordChange) {
+    if (!currentPassword) {
+      throw new AuthError(400, "Current password is required");
+    }
+    const passwordMatches = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!passwordMatches) {
+      throw new AuthError(401, "Current password is incorrect");
+    }
   }
 
   const newPasswordHash = await bcrypt.hash(newPassword, BCRYPT_WORK_FACTOR);

@@ -4,7 +4,7 @@ import { requireAuth } from "../../middleware/auth";
 import { blockIfPasswordChangeRequired } from "../../middleware/forcePasswordChange";
 import { requirePhase } from "../../middleware/phase";
 import { requireRole } from "../../middleware/role";
-import { postIdeaSchema } from "./ideas.schemas";
+import { postIdeaSchema, requestRevisionSchema } from "./ideas.schemas";
 import * as ideas from "./ideas.service";
 
 export const ideasRouter = Router({ mergeParams: true });
@@ -27,6 +27,26 @@ ideasRouter.post("/", ...authed, inIdeaAnnouncement, async (req, res, next) => {
 ideasRouter.get("/", ...authed, async (req, res, next) => {
   try {
     return res.json(await ideas.listIdeas(req.user!.user_id, req.params.cpiId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// A student edits and resubmits their group's idea (author check in service).
+ideasRouter.patch("/:ideaId", ...authed, inIdeaAnnouncement, async (req, res, next) => {
+  try {
+    const { title, description } = postIdeaSchema.parse(req.body);
+    return res.json(await ideas.updateIdea(req.user!.user_id, req.params.cpiId, req.params.ideaId, title, description));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Coordinator or supervisor asks the group to revise (authorized in service).
+ideasRouter.post("/:ideaId/request-revision", ...authed, inIdeaAnnouncement, async (req, res, next) => {
+  try {
+    const { note } = requestRevisionSchema.parse(req.body);
+    return res.json(await ideas.requestIdeaRevision(req.user!.user_id, req.params.cpiId, req.params.ideaId, note));
   } catch (err) {
     return next(err);
   }
