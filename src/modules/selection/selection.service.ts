@@ -236,10 +236,11 @@ export async function getSelectionState(userId: string, cpiId: string) {
     return { role: "COORDINATOR", selections, interestExpressions: interest };
   }
 
-  // Supervisor: what they marked willing + selections addressed to them.
+  // Supervisor: what they marked willing + selections addressed to them +
+  // student ideas seeking a supervisor they could still mark willing on.
   const lecturerId = await getAcceptedSupervisorLecturerId(userId, cpiId);
   if (lecturerId) {
-    const [willingByMe, pendingSelections] = await Promise.all([
+    const [willingByMe, pendingSelections, seeking] = await Promise.all([
       prisma.interestExpression.findMany({
         where: { courseInstanceId: cpiId, supervisorLecturerId: lecturerId, type: EoiType.SUPERVISOR_WILLING },
         include: eoiInclude,
@@ -248,8 +249,17 @@ export async function getSelectionState(userId: string, cpiId: string) {
         where: { courseInstanceId: cpiId, supervisorLecturerId: lecturerId, status: SelectionStatus.PENDING },
         include: selectionInclude,
       }),
+      prisma.interestExpression.findMany({
+        where: { courseInstanceId: cpiId, type: EoiType.SEEKING_SUPERVISOR },
+        include: eoiInclude,
+      }),
     ]);
-    return { role: "SUPERVISOR", willingByMe, pendingSelections };
+    // Ideas the supervisor hasn't already marked willing on.
+    const willingIdeaIds = new Set(willingByMe.map((w) => w.ideaId));
+    const seekingIdeas = seeking
+      .filter((s) => !willingIdeaIds.has(s.ideaId))
+      .map((s) => ({ ideaId: s.ideaId, idea: s.idea, group: s.group }));
+    return { role: "SUPERVISOR", willingByMe, pendingSelections, seekingIdeas };
   }
 
   // Student: their group's interest, incoming willingness, and current selection.
@@ -288,11 +298,12 @@ export async function getSelectionState(userId: string, cpiId: string) {
 
 const eoiInclude = {
   idea: { select: { id: true, title: true, authorType: true } },
-  supervisor: { include: { user: { select: { email: true, fullName: true } } } },
+  group: { select: { id: true, name: true } },
+  supervisor: { include: { user: { select: { id: true, email: true, fullName: true } } } },
 } as const;
 
 const selectionInclude = {
   idea: { select: { id: true, title: true, authorType: true } },
   group: { select: { id: true, name: true } },
-  supervisor: { include: { user: { select: { email: true, fullName: true } } } },
+  supervisor: { include: { user: { select: { id: true, email: true, fullName: true } } } },
 } as const;

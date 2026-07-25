@@ -39,6 +39,15 @@ allocationRouter.put("/:groupId", ...coordinatorOnly, inRegistration, async (req
   }
 });
 
+// Coordinator-Managed only: mark a pairing reviewed/confirmed (spec Step 7).
+allocationRouter.post("/:groupId/confirm", ...coordinatorOnly, inRegistration, async (req, res, next) => {
+  try {
+    return res.json(await allocation.confirmAllocation(req.user!.user_id, req.params.cpiId, req.params.groupId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 allocationRouter.post("/finalize", ...coordinatorOnly, inRegistration, async (req, res, next) => {
   try {
     return res.json(await allocation.finalizeAllocations(req.user!.user_id, req.params.cpiId));

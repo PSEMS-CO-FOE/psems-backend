@@ -26,7 +26,7 @@ export async function reviewSession(userId: string, cpiId: string, sessionId: st
     where: { evaluationSessionId: sessionId },
     include: {
       criterion: { select: { id: true, name: true, maxScore: true, orderIndex: true } },
-      cpiEvaluator: { include: { lecturer: { include: { user: { select: { email: true, fullName: true } } } } } },
+      cpiEvaluator: { include: { lecturer: { include: { user: { select: { id: true, email: true, fullName: true } } } } } },
     },
   });
 

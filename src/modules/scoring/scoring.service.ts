@@ -28,13 +28,36 @@ export async function submitScores(userId: string, cpiId: string, sessionId: str
   if (!cpiEvaluatorId) throw new AuthError(403, "Only an evaluator of this CPI can submit scores");
 
   const session = await loadSession(sessionId, cpiId);
-  if (session.status === SessionStatus.FINALIZED) {
-    throw new AuthError(409, "This session is finalized — scores are locked");
-  }
 
   const assigned = await assignedEvaluatorIds(session.evaluationStageId);
   if (!assigned.includes(cpiEvaluatorId)) {
     throw new AuthError(403, "You are not assigned to evaluate this stage");
+  }
+
+  // If the stage defines its own execution window, scoring is only open within
+  // it — so stages (proposal/mid/final) can each run at their own time.
+  const stage = await prisma.evaluationStage.findUnique({
+    where: { id: session.evaluationStageId },
+    select: { executionWindowStart: true, executionWindowEnd: true },
+  });
+  if (stage?.executionWindowStart && stage.executionWindowEnd) {
+    const now = new Date();
+    if (now < stage.executionWindowStart) throw new AuthError(403, "This stage's scoring window has not opened yet");
+    if (now > stage.executionWindowEnd) throw new AuthError(403, "This stage's scoring window has closed");
+  }
+
+  // Scoring is only open while a session is SCHEDULED (still collecting) or
+  // CORRECTION_REQUESTED (reopened for one evaluator). Once AWAITING_HEAD_JUDGE
+  // or FINALIZED, changes must go through the Head Judge's correction flow —
+  // otherwise an evaluator could silently revise after the HJ began reviewing.
+  if (session.status === SessionStatus.AWAITING_HEAD_JUDGE || session.status === SessionStatus.FINALIZED) {
+    throw new AuthError(409, "Scoring is closed for this session — awaiting or completed Head Judge review");
+  }
+  if (session.status === SessionStatus.CORRECTION_REQUESTED) {
+    const review = await prisma.headJudgeReview.findUnique({ where: { evaluationSessionId: sessionId } });
+    if (review?.correctionEvaluatorId !== cpiEvaluatorId) {
+      throw new AuthError(409, "Only the evaluator asked to correct may resubmit for this session");
+    }
   }
 
   const criteria = await prisma.rubricCriterion.findMany({ where: { evaluationStageId: session.evaluationStageId } });
@@ -74,9 +97,14 @@ export async function submitScores(userId: string, cpiId: string, sessionId: str
 }
 
 // Flip a session to AWAITING_HEAD_JUDGE once every assigned evaluator has scored
-// every criterion (spec Flow B: "once all evaluators submit, Head Judge notified").
+// every criterion AND at least evaluatorsRequired evaluators are involved (spec
+// Flow B + the stage's evaluatorsRequired). Only ever promotes — never demotes,
+// so a reopened CORRECTION_REQUESTED session isn't downgraded mid-fix.
 async function refreshSessionReadiness(sessionId: string, assigned: string[], criteriaCount: number) {
-  const session = await prisma.evaluationSession.findUnique({ where: { id: sessionId } });
+  const session = await prisma.evaluationSession.findUnique({
+    where: { id: sessionId },
+    include: { stage: { select: { evaluatorsRequired: true } } },
+  });
   if (!session || session.status === SessionStatus.FINALIZED) return;
 
   const counts = await prisma.rubricScore.groupBy({
@@ -85,12 +113,12 @@ async function refreshSessionReadiness(sessionId: string, assigned: string[], cr
     _count: { rubricCriterionId: true },
   });
   const complete =
-    assigned.length > 0 &&
+    criteriaCount > 0 &&
+    assigned.length >= session.stage.evaluatorsRequired &&
     assigned.every((id) => counts.find((c) => c.cpiEvaluatorId === id)?._count.rubricCriterionId === criteriaCount);
 
-  const next = complete ? SessionStatus.AWAITING_HEAD_JUDGE : SessionStatus.SCHEDULED;
-  if (next !== session.status) {
-    await prisma.evaluationSession.update({ where: { id: sessionId }, data: { status: next } });
+  if (complete && session.status !== SessionStatus.AWAITING_HEAD_JUDGE) {
+    await prisma.evaluationSession.update({ where: { id: sessionId }, data: { status: SessionStatus.AWAITING_HEAD_JUDGE } });
   }
 }
 

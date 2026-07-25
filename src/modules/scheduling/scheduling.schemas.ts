@@ -7,4 +7,13 @@ export const availabilitySchema = z
 export const scheduleSessionSchema = z.object({
   scheduledStart: z.coerce.date(),
   scheduledEnd: z.coerce.date(),
+  location: z.string().trim().max(500).optional(),
+});
+
+export const presentationDurationSchema = z.object({
+  seconds: z.number().int().min(0).max(86400),
+});
+
+export const timerControlSchema = z.object({
+  action: z.enum(["start", "pause", "stop", "reset"]),
 });

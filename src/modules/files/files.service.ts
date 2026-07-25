@@ -24,15 +24,28 @@ export async function submitProposal(userId: string, cpiId: string, stageId: str
   if (!stage || stage.courseInstanceId !== cpiId) throw new AuthError(404, "Stage not found in this CPI");
   if (!stage.submissionRequired) throw new AuthError(400, "This stage does not require a submission");
 
-  const window = await prisma.cpiTimeline.findUnique({
-    where: { courseInstanceId_phase: { courseInstanceId: cpiId, phase: CpiPhase.PROPOSAL_SUBMISSION } },
-  });
-  if (!window) throw new AuthError(403, "The submission window has not been scheduled");
-  const now = new Date();
-  if (now < window.startDate) {
-    throw new AuthError(403, `Submissions open at ${window.startDate.toISOString()}`);
+  // Prefer the stage's own submission window; fall back to the CPI's
+  // PROPOSAL_SUBMISSION phase when the stage doesn't define one. This lets each
+  // submission stage (Proposal, Mid, Final, Report) carry its own deadline.
+  let windowStart: Date;
+  let windowEnd: Date;
+  if (stage.submissionWindowStart && stage.submissionWindowEnd) {
+    windowStart = stage.submissionWindowStart;
+    windowEnd = stage.submissionWindowEnd;
+  } else {
+    const phase = await prisma.cpiTimeline.findUnique({
+      where: { courseInstanceId_phase: { courseInstanceId: cpiId, phase: CpiPhase.PROPOSAL_SUBMISSION } },
+    });
+    if (!phase) throw new AuthError(403, "The submission window has not been scheduled");
+    windowStart = phase.startDate;
+    windowEnd = phase.endDate;
   }
-  const isLate = now > window.endDate;
+
+  const now = new Date();
+  if (now < windowStart) {
+    throw new AuthError(403, `Submissions open at ${windowStart.toISOString()}`);
+  }
+  const isLate = now > windowEnd;
 
   const objectKey = `cpi/${cpiId}/stage/${stageId}/group/${groupId}/${crypto.randomUUID()}-${file.originalName}`;
   const { storagePath } = await storage.save(objectKey, file.buffer, file.mimeType);

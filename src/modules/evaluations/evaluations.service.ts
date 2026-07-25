@@ -43,6 +43,10 @@ export async function setEvaluationConfig(coordinatorUserId: string, cpiId: stri
           weight: stage.weight,
           evaluatorsRequired: stage.evaluatorsRequired,
           submissionRequired: stage.submissionRequired,
+          submissionWindowStart: stage.submissionWindowStart,
+          submissionWindowEnd: stage.submissionWindowEnd,
+          executionWindowStart: stage.executionWindowStart,
+          executionWindowEnd: stage.executionWindowEnd,
           orderIndex: i,
           criteria: {
             create: stage.criteria.map((c, ci) => ({
