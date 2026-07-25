@@ -1,9 +1,9 @@
-import { CpiParticipationMode, CpiPhase, CpiProjectType } from "@prisma/client";
+import { CpiParticipationMode, CpiPhase } from "@prisma/client";
 import { z } from "zod";
 
 export const createCpiSchema = z.object({
   name: z.string().trim().min(1),
-  projectType: z.nativeEnum(CpiProjectType),
+  projectType: z.string().trim().min(1).max(100),
   participationMode: z.nativeEnum(CpiParticipationMode),
   department: z.string().trim().min(1),
   academicYear: z.string().trim().min(1),
@@ -16,9 +16,10 @@ const timelinePhaseSchema = z.object({
 });
 
 export const setTimelineSchema = z.object({
-  // All 10 phases must be provided together — a partial timeline would leave
-  // gated actions unreachable. Completeness + ordering is checked in the service.
-  phases: z.array(timelinePhaseSchema).length(10),
+  // A CPI may use any subset of the canonical phases (at least one). Omitted
+  // phases simply leave their gated actions closed. Uniqueness + canonical
+  // ordering is checked in the service.
+  phases: z.array(timelinePhaseSchema).min(1).max(10),
 });
 
 export const inviteSupervisorSchema = z.object({ lecturerUserId: z.string().uuid() });

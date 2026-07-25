@@ -33,13 +33,6 @@ enum CpiMode {
   COORDINATOR_MANAGED
 }
 
-enum CpiProjectType {
-  FYP
-  DATA_MANAGEMENT
-  HPC
-  INNOVATION_CHALLENGE
-}
-
 // Whether students take part as groups or individually (spec 3.3 Step 1).
 // Stored at creation; acted on in Week 4's group formation.
 enum CpiParticipationMode {
@@ -77,6 +70,7 @@ enum IdeaApprovalStatus {
   PENDING
   APPROVED
   REJECTED
+  REVISION_REQUESTED
 }
 
 // The three kinds of Expression of Interest at Project Selection (spec 3.3
@@ -203,7 +197,8 @@ model Lecturer {
 model CourseInstance {
   id                    String               @id @default(uuid())
   name                  String // e.g. "Computer Engineering FYP 2026"
-  projectType           CpiProjectType       @map("project_type")
+  projectType           String               @map("project_type") // free-text; coordinator-defined
+
   participationMode     CpiParticipationMode @map("participation_mode")
   department            String
   academicYear          String               @map("academic_year")
@@ -325,6 +320,7 @@ model ProjectIdea {
   description      String
   visibility       IdeaVisibility
   approvalStatus   IdeaApprovalStatus? @map("approval_status")
+  revisionNote     String?             @map("revision_note")
   similarityFlag   Boolean             @default(false) @map("similarity_flag")
   createdAt        DateTime            @default(now()) @map("created_at")
 
@@ -420,14 +416,23 @@ model ProjectAllocation {
 // A customizable evaluation stage (spec 3.3 Step 8 / table evaluation_stages).
 // weight is a percentage; stage weights sum to 100 across the CPI.
 model EvaluationStage {
-  id                 String   @id @default(uuid())
-  courseInstanceId   String   @map("course_instance_id")
-  name               String
-  weight             Int // percent; stages sum to 100 per CPI
-  evaluatorsRequired Int      @map("evaluators_required")
-  submissionRequired Boolean  @default(false) @map("submission_required")
-  orderIndex         Int      @map("order_index")
-  createdAt          DateTime @default(now()) @map("created_at")
+  id                    String    @id @default(uuid())
+  courseInstanceId      String    @map("course_instance_id")
+  name                  String
+  weight                Int // percent; stages sum to 100 per CPI
+  evaluatorsRequired    Int       @map("evaluators_required")
+  submissionRequired    Boolean   @default(false) @map("submission_required")
+  // Per-stage submission window; when null, submissions fall back to the CPI's
+  // PROPOSAL_SUBMISSION phase window (so multi-stage submissions can differ).
+  submissionWindowStart DateTime? @map("submission_window_start")
+  submissionWindowEnd   DateTime? @map("submission_window_end")
+  // Per-stage scoring/presentation window; when set, this stage can only be
+  // scored within it (so proposal/mid/final each run at their own time inside
+  // the EVALUATION_EXECUTION phase). When null, the phase window alone governs.
+  executionWindowStart  DateTime? @map("execution_window_start")
+  executionWindowEnd    DateTime? @map("execution_window_end")
+  orderIndex            Int       @map("order_index")
+  createdAt             DateTime  @default(now()) @map("created_at")
 
   courseInstance CourseInstance      @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
   criteria       RubricCriterion[]
@@ -524,6 +529,14 @@ model EvaluationSession {
   evaluationStageId String        @map("evaluation_stage_id")
   scheduledStart    DateTime?     @map("scheduled_start")
   scheduledEnd      DateTime?     @map("scheduled_end")
+  location          String? // free text: room, video link, or blank
+  // Final elapsed presentation time (set when the shared timer is stopped).
+  presentationDurationSeconds Int? @map("presentation_duration_seconds")
+  // Shared presentation timer, live across everyone viewing the session. The
+  // live elapsed value is accumulated + (running ? now - startedAt : 0).
+  timerStartedAt          DateTime? @map("timer_started_at")
+  timerAccumulatedSeconds Int       @default(0) @map("timer_accumulated_seconds")
+  timerRunning            Boolean   @default(false) @map("timer_running")
   status            SessionStatus @default(SCHEDULED)
   createdAt         DateTime      @default(now()) @map("created_at")
 
