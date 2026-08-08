@@ -29,12 +29,12 @@ lecturersRouter.post("/register", async (req, res, next) => {
 });
 
 // Coordinators browse the approved pool to pick supervisors/evaluators/HJ by
-// name instead of pasting a raw userId.
+// name; the System Admin uses it to promote a lecturer to Course Coordinator.
 lecturersRouter.get(
   "/approved",
   requireAuth,
   blockIfPasswordChangeRequired,
-  requireRole(Role.COURSE_COORDINATOR),
+  requireRole(Role.COURSE_COORDINATOR, Role.SYSTEM_ADMIN),
   async (_req, res, next) => {
     try {
       return res.json(await listApprovedLecturers());
