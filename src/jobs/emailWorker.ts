@@ -47,7 +47,7 @@ async function processEmail(job: Job<EmailJob>) {
         "If you did not expect this email, contact your department coordinator.",
       ].join("\n"),
     );
-    await prisma.studentProvisioningLog.update({
+    await prisma.provisioningLog.update({
       where: { id: provisioningLogId },
       data: { deliveryStatus: "SENT", dispatchedAt: new Date() },
     });
@@ -65,7 +65,7 @@ export function startEmailWorker(): Worker<EmailJob> {
     if (!job || job.attemptsMade < (job.opts.attempts ?? 1)) return;
     console.error(`[email] delivery permanently failed for job ${job.id}:`, err.message);
     if (job.data.kind === "credential") {
-      await prisma.studentProvisioningLog
+      await prisma.provisioningLog
         .update({ where: { id: job.data.provisioningLogId }, data: { deliveryStatus: "FAILED", failureReason: err.message } })
         .catch((updateErr) => console.error("[email] failed to record delivery failure", updateErr));
     }

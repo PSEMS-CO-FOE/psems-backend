@@ -17,6 +17,7 @@ import { notificationsRouter } from "./modules/notifications/notifications.route
 import { guestRouter } from "./modules/panel/guest.routes";
 import { panelRouter } from "./modules/panel/panel.routes";
 import { policyRouter } from "./modules/policy/policy.routes";
+import { profilesRouter } from "./modules/profiles/profiles.routes";
 import { reviewRouter } from "./modules/review/review.routes";
 import { schedulingRouter } from "./modules/scheduling/scheduling.routes";
 import { scoringRouter } from "./modules/scoring/scoring.routes";
@@ -39,6 +40,7 @@ app.use("/users", usersRouter);
 app.use("/students", studentsRouter);
 app.use("/lecturers", lecturersRouter);
 app.use("/notifications", notificationsRouter);
+app.use("/profiles", profilesRouter);
 // Unauthenticated by design: a guest's one-time link is the credential, and it
 // grants nothing beyond scoring the sessions it names.
 app.use("/guest", guestRouter);

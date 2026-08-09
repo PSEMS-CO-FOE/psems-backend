@@ -11,3 +11,14 @@ export const registerLecturerSchema = z.object({
 });
 
 export type RegisterLecturerInput = z.infer<typeof registerLecturerSchema>;
+
+// Expected CSV header: email,fullName,department,designation
+// designation is optional — many departments do not track it.
+export const csvLecturerRowSchema = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  fullName: z.string().trim().min(1, "fullName is required"),
+  department: z.string().trim().min(1, "department is required"),
+  designation: z.string().trim().min(1).optional(),
+});
+
+export type CsvLecturerRow = z.infer<typeof csvLecturerRowSchema>;

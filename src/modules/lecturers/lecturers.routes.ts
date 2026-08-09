@@ -1,8 +1,10 @@
 import { Router } from "express";
+import multer from "multer";
 import { Role } from "@prisma/client";
 import { requireAuth } from "../../middleware/auth";
 import { blockIfPasswordChangeRequired } from "../../middleware/forcePasswordChange";
 import { requireRole } from "../../middleware/role";
+import { bulkProvisionLecturers } from "./lecturerProvisioning.service";
 import { registerLecturerSchema } from "./lecturers.schemas";
 import {
   decideLecturer,
@@ -12,6 +14,28 @@ import {
 } from "./lecturers.service";
 
 export const lecturersRouter = Router();
+
+// CSV stays in memory — it is small and never needs to touch disk.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024 } });
+
+// Bulk-provision lecturers the same way students are provisioned. These accounts
+// are auto-approved (an admin uploaded them) and carry a forced first-login
+// password change, which self-registered lecturers never had.
+lecturersRouter.post(
+  "/bulk-provision",
+  requireAuth,
+  blockIfPasswordChangeRequired,
+  requireRole(Role.SYSTEM_ADMIN),
+  upload.single("file"),
+  async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: "Attach a CSV file in the 'file' field" });
+      return res.status(201).json(await bulkProvisionLecturers(req.user!.user_id, req.file.buffer));
+    } catch (err) {
+      return next(err);
+    }
+  },
+);
 
 // Public: anyone may apply; the account stays PENDING (login blocked) until
 // a System Admin approves it.

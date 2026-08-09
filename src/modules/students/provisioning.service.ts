@@ -127,7 +127,7 @@ export async function bulkProvisionStudents(
 }
 
 export async function getBatchStatus(batchId: string) {
-  const logs = await prisma.studentProvisioningLog.findMany({
+  const logs = await prisma.provisioningLog.findMany({
     where: { batchId },
     select: { email: true, deliveryStatus: true, failureReason: true, dispatchedAt: true },
     orderBy: { email: "asc" },
