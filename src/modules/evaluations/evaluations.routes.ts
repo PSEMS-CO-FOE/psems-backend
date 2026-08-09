@@ -12,6 +12,8 @@ import {
   setPanelRulesSchema,
 } from "./evaluations.schemas";
 import * as evaluations from "./evaluations.service";
+import { applyStagePanelSchema } from "../panel/panel.schemas";
+import { applyPanelToStage } from "../panel/panel.service";
 
 export const evaluationsRouter = Router({ mergeParams: true });
 
@@ -46,6 +48,19 @@ evaluationsRouter.patch("/stages/:stageId", ...coordinatorOnly, async (req, res,
   try {
     const input = patchStageSchema.parse(req.body);
     return res.json(await evaluations.patchStage(req.user!.user_id, req.params.cpiId, req.params.stageId, input));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// One panel across every group in the stage — the usual starting point, since
+// the same people normally evaluate everybody. Per-session edits layer on top.
+evaluationsRouter.put("/stages/:stageId/panel", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const { panelists, replaceExisting } = applyStagePanelSchema.parse(req.body);
+    return res.json(
+      await applyPanelToStage(req.user!.user_id, req.params.cpiId, req.params.stageId, panelists, replaceExisting),
+    );
   } catch (err) {
     return next(err);
   }

@@ -101,6 +101,112 @@ export async function seedPanel(sessionId: string) {
   }
 }
 
+export interface StagePanelMember {
+  userId: string;
+  role: PanelRole;
+  weightPercent?: number;
+  markCounting?: MarkCounting;
+}
+
+// Set one panel across every group in a stage — the ordinary case, where the
+// same people evaluate everybody. Per-session editing then adjusts individual
+// groups on top, so a coordinator starts from "everyone" and deviates where they
+// need to, rather than building each group's panel from scratch.
+//
+// Two things are deliberately protected: a seat that has already submitted marks
+// is never removed (that would silently discard someone's scoring), and guests
+// are left alone, since they are attached to particular groups by nature.
+export async function applyPanelToStage(
+  coordinatorUserId: string,
+  cpiId: string,
+  stageId: string,
+  members: StagePanelMember[],
+  replaceExisting: boolean,
+) {
+  await loadOwnedCpi(coordinatorUserId, cpiId);
+
+  const stage = await prisma.evaluationStage.findUnique({ where: { id: stageId } });
+  if (!stage || stage.courseInstanceId !== cpiId) throw new AuthError(404, "Stage not found in this CPI");
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: members.map((m) => m.userId) } },
+    include: { lecturer: true },
+  });
+  if (users.length !== new Set(members.map((m) => m.userId)).size) {
+    throw new AuthError(404, "One or more of those people were not found");
+  }
+
+  const lecturerIds = users.map((u) => u.lecturer?.id).filter((id): id is string => Boolean(id));
+  const cpiEvaluators = await prisma.cpiEvaluator.findMany({
+    where: { courseInstanceId: cpiId, lecturerId: { in: lecturerIds } },
+  });
+  const evaluatorByLecturer = new Map(cpiEvaluators.map((e) => [e.lecturerId, e.id]));
+
+  const sessions = await prisma.evaluationSession.findMany({
+    where: { evaluationStageId: stageId },
+    select: { id: true, status: true, group: { select: { name: true } } },
+  });
+
+  const applied: string[] = [];
+  const skipped: { group: string; reason: string }[] = [];
+  const kept: { group: string; reason: string }[] = [];
+
+  for (const session of sessions) {
+    if (session.status === "FINALIZED") {
+      skipped.push({ group: session.group.name, reason: "already approved" });
+      continue;
+    }
+
+    for (const member of members) {
+      const user = users.find((u) => u.id === member.userId)!;
+      const lecturerId = user.lecturer?.id ?? null;
+      await prisma.sessionPanelist.upsert({
+        where: { evaluationSessionId_userId: { evaluationSessionId: session.id, userId: member.userId } },
+        update: {
+          role: member.role,
+          weightPercent: member.weightPercent ?? null,
+          markCounting: member.markCounting ?? null,
+        },
+        create: {
+          evaluationSessionId: session.id,
+          role: member.role,
+          userId: member.userId,
+          lecturerId,
+          cpiEvaluatorId: lecturerId ? (evaluatorByLecturer.get(lecturerId) ?? null) : null,
+          weightPercent: member.weightPercent ?? null,
+          markCounting: member.markCounting ?? null,
+          addedById: coordinatorUserId,
+        },
+      });
+    }
+
+    if (replaceExisting) {
+      const surplus = await prisma.sessionPanelist.findMany({
+        where: {
+          evaluationSessionId: session.id,
+          guestPanelistId: null,
+          userId: { notIn: members.map((m) => m.userId) },
+        },
+        include: { _count: { select: { scores: true } }, user: { select: { fullName: true, email: true } } },
+      });
+      for (const seat of surplus) {
+        if (seat._count.scores > 0) {
+          kept.push({
+            group: session.group.name,
+            reason: `${seat.user?.fullName || seat.user?.email} has already submitted marks`,
+          });
+          continue;
+        }
+        await prisma.sessionPanelist.delete({ where: { id: seat.id } });
+      }
+    }
+
+    applied.push(session.id);
+  }
+
+  return { appliedTo: applied.length, skipped, kept };
+}
+
 export async function listPanel(userId: string, cpiId: string, sessionId: string) {
   const session = await loadSessionInCpi(sessionId, cpiId);
   const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId }, select: { createdById: true } });

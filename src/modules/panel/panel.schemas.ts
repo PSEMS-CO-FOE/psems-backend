@@ -23,6 +23,23 @@ export const joinPanelSchema = z.object({
   role: panelRole.default(PanelRole.EVALUATOR),
 });
 
+// One panel applied across every group in a stage. `replaceExisting` decides
+// whether people not on the list are removed — anyone who has already marked is
+// kept regardless, so nobody's scoring is silently discarded.
+export const applyStagePanelSchema = z.object({
+  panelists: z
+    .array(
+      z.object({
+        userId: z.string().uuid(),
+        role: panelRole,
+        weightPercent: z.number().min(0).max(100).optional(),
+        markCounting: markCounting.optional(),
+      }),
+    )
+    .max(50),
+  replaceExisting: z.boolean().default(false),
+});
+
 export const inviteGuestSchema = z.object({
   fullName: z.string().min(1).max(200),
   email: z.string().email(),

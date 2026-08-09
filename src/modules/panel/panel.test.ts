@@ -100,7 +100,8 @@ beforeAll(async () => {
   await makeUser("ev1", Role.LECTURER, { approvedLecturer: true });
   await makeUser("ev2", Role.LECTURER, { approvedLecturer: true });
   await makeUser("s1", Role.STUDENT, { student: true });
-  for (const key of ["coord", "ev1", "ev2", "s1"]) await login(key);
+  await makeUser("s2", Role.STUDENT, { student: true });
+  for (const key of ["coord", "ev1", "ev2", "s1", "s2"]) await login(key);
 });
 
 afterAll(async () => {
@@ -579,5 +580,91 @@ describe("Per-seat weighting", () => {
     // (8 + 4) / 2 = 6 out of 10 = 60%.
     const mark = await prisma.finalMark.findFirst({ where: { groupId } });
     expect(mark!.stageScorePercent).toBeCloseTo(60, 5);
+  });
+});
+
+describe("One panel across every group", () => {
+  it("applies the same people to all sessions, then lets one group differ", async () => {
+    const { cpiId, stage } = await setupOpenEvaluation();
+
+    // A second group, so "all sessions" means more than one.
+    await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);
+    const groupB = await request(app).post(`/courses/${cpiId}/groups`).set(as("s2")).send({ name: "Group B" });
+    await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
+    const ideaB = await request(app).post(`/courses/${cpiId}/ideas`).set(as("coord")).send({ title: "B", description: "d" });
+    await openPhase(cpiId, CpiPhase.PROJECT_REGISTRATION);
+    await request(app)
+      .put(`/courses/${cpiId}/allocations/${groupB.body.id}`)
+      .set(as("coord"))
+      .send({ ideaId: ideaB.body.id })
+      .expect(200);
+    await openPhase(cpiId, CpiPhase.AVAILABILITY_SUBMISSION);
+    await request(app).post(`/courses/${cpiId}/sessions/generate`).set(as("coord")).expect(201);
+    await openPhase(cpiId, CpiPhase.EVALUATION_EXECUTION);
+
+    // The usual starting point: the same two people evaluate everybody.
+    const applied = await request(app)
+      .put(`/courses/${cpiId}/evaluations/stages/${stage.id}/panel`)
+      .set(as("coord"))
+      .send({
+        panelists: [
+          { userId: userIds.ev1, role: "SENIOR_EVALUATOR", weightPercent: 60 },
+          { userId: userIds.ev2, role: "EVALUATOR", weightPercent: 40 },
+        ],
+      });
+    expect(applied.status).toBe(200);
+    expect(applied.body.appliedTo).toBe(2);
+
+    const sessions = await request(app).get(`/courses/${cpiId}/sessions`).set(as("coord"));
+    expect(sessions.body).toHaveLength(2);
+    for (const session of sessions.body) {
+      const panel = await request(app).get(`/courses/${cpiId}/sessions/${session.id}/panel`).set(as("coord"));
+      expect(panel.body.panelists).toHaveLength(2);
+    }
+
+    // ...and then one group deviates, without disturbing the other.
+    const [firstSession, secondSession] = sessions.body;
+    const firstPanel = await request(app).get(`/courses/${cpiId}/sessions/${firstSession.id}/panel`).set(as("coord"));
+    const ev2Seat = firstPanel.body.panelists.find(
+      (p: { user: { id: string } }) => p.user?.id === userIds.ev2,
+    );
+    await request(app)
+      .delete(`/courses/${cpiId}/sessions/${firstSession.id}/panel/${ev2Seat.id}`)
+      .set(as("coord"))
+      .expect(200);
+
+    const after = await request(app).get(`/courses/${cpiId}/sessions/${firstSession.id}/panel`).set(as("coord"));
+    expect(after.body.panelists).toHaveLength(1);
+    const untouched = await request(app).get(`/courses/${cpiId}/sessions/${secondSession.id}/panel`).set(as("coord"));
+    expect(untouched.body.panelists).toHaveLength(2);
+  });
+
+  it("never removes someone who has already marked", async () => {
+    const { cpiId, sessionId, stage, criteria } = await setupOpenEvaluation();
+
+    await request(app)
+      .put(`/courses/${cpiId}/evaluations/stages/${stage.id}/panel`)
+      .set(as("coord"))
+      .send({ panelists: [{ userId: userIds.ev1, role: "EVALUATOR" }] })
+      .expect(200);
+
+    await request(app)
+      .post(`/courses/${cpiId}/sessions/${sessionId}/scores`)
+      .set(as("ev1"))
+      .send({ scores: scoresFor(criteria, 8), overallComment: "done" })
+      .expect(201);
+
+    // Replacing the panel with somebody else would otherwise discard ev1's
+    // marks along with their seat. They are kept, and the caller is told why.
+    const replaced = await request(app)
+      .put(`/courses/${cpiId}/evaluations/stages/${stage.id}/panel`)
+      .set(as("coord"))
+      .send({ panelists: [{ userId: userIds.ev2, role: "EVALUATOR" }], replaceExisting: true });
+    expect(replaced.status).toBe(200);
+    expect(replaced.body.kept).toHaveLength(1);
+    expect(replaced.body.kept[0].reason).toContain("already submitted marks");
+
+    const panel = await request(app).get(`/courses/${cpiId}/sessions/${sessionId}/panel`).set(as("coord"));
+    expect(panel.body.panelists).toHaveLength(2);
   });
 });
