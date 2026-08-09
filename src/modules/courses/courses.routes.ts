@@ -7,7 +7,9 @@ import { requireRole } from "../../middleware/role";
 import {
   assignEvaluatorSchema,
   createCpiSchema,
+  decideSupervisorRequestSchema,
   inviteSupervisorSchema,
+  requestToSuperviseSchema,
   respondInviteSchema,
   setHeadJudgeSchema,
   setTimelineSchema,
@@ -69,6 +71,16 @@ coursesRouter.get("/mine/lecturer", ...authed, async (req, res, next) => {
   }
 });
 
+// Discovery: any approved lecturer can find courses and ask to join one.
+// Deliberately mounted before the /:cpiId routes so "open" is not read as an id.
+coursesRouter.get("/open", ...authed, async (req, res, next) => {
+  try {
+    return res.json(await courses.listOpenCpis(req.user!.user_id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 // Non-sensitive summary for any authenticated participant (name for headers,
 // etc.). Defined before "/:cpiId" so "summary" isn't read as a phase action.
 coursesRouter.get("/:cpiId/summary", ...authed, async (req, res, next) => {
@@ -113,6 +125,34 @@ coursesRouter.post("/:cpiId/supervisors/respond", ...authed, inSupervisorAdditio
   try {
     const { decision } = respondInviteSchema.parse(req.body);
     return res.json(await courses.respondToSupervisorInvite(req.user!.user_id, req.params.cpiId, decision));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+coursesRouter.post("/:cpiId/supervisor-requests", ...authed, async (req, res, next) => {
+  try {
+    const { note } = requestToSuperviseSchema.parse(req.body ?? {});
+    return res.status(201).json(await courses.requestToSupervise(req.user!.user_id, req.params.cpiId, note));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+coursesRouter.get("/:cpiId/supervisor-requests", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    return res.json(await courses.listSupervisorRequests(req.user!.user_id, req.params.cpiId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+coursesRouter.post("/:cpiId/supervisor-requests/:requestId", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const { decision } = decideSupervisorRequestSchema.parse(req.body);
+    return res.json(
+      await courses.decideSupervisorRequest(req.user!.user_id, req.params.cpiId, req.params.requestId, decision),
+    );
   } catch (err) {
     return next(err);
   }

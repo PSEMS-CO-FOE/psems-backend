@@ -32,3 +32,11 @@ export const setHeadJudgeSchema = z.object({ lecturerUserId: z.string().uuid() }
 
 export type CreateCpiInput = z.infer<typeof createCpiSchema>;
 export type SetTimelineInput = z.infer<typeof setTimelineSchema>;
+
+export const requestToSuperviseSchema = z.object({
+  note: z.string().trim().max(2000).optional(),
+});
+
+export const decideSupervisorRequestSchema = z.object({
+  decision: z.enum(["APPROVE", "REJECT"]),
+});

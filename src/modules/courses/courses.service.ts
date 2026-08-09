@@ -11,6 +11,7 @@ import { AuthError } from "../auth/auth.service";
 import { assertRole } from "../shared/authorization";
 import { notify } from "../notifications/notifications.service";
 import { createPolicyData } from "../policy/policy.service";
+import { loadPolicy } from "../shared/cpiMembership";
 import { CreateCpiInput, SetTimelineInput } from "./courses.schemas";
 
 // Canonical phase order (spec 3.3 Step 2). Used to validate that a submitted
@@ -137,6 +138,153 @@ export async function inviteSupervisor(coordinatorUserId: string, cpiId: string,
   });
 
   return supervisor;
+}
+
+// Courses an approved lecturer can discover and ask to join.
+//
+// PRIVACY BOUNDARY: this returns course metadata and nothing else. Accepted
+// supervisors can see every idea in a course including groups' restricted ones,
+// so opening discovery to any lecturer would leak them. A lecturer sees ideas
+// only once they are actually on the course.
+export async function listOpenCpis(userId: string) {
+  const lecturer = await prisma.lecturer.findUnique({ where: { userId }, include: { user: true } });
+  if (!lecturer || lecturer.approvalStatus !== LecturerApprovalStatus.APPROVED) return [];
+
+  const [already, requested] = await Promise.all([
+    prisma.cpiSupervisor.findMany({ where: { lecturerId: lecturer.id }, select: { courseInstanceId: true } }),
+    prisma.supervisorRequest.findMany({
+      where: { lecturerId: lecturer.id },
+      select: { courseInstanceId: true, status: true },
+    }),
+  ]);
+  const requestedBy = new Map(requested.map((r) => [r.courseInstanceId, r.status]));
+  const excluded = new Set(already.map((a) => a.courseInstanceId));
+
+  const cpis = await prisma.courseInstance.findMany({
+    where: { id: { notIn: [...excluded] } },
+    select: {
+      id: true,
+      name: true,
+      department: true,
+      academicYear: true,
+      projectType: true,
+      createdBy: { select: { fullName: true, email: true } },
+      _count: { select: { groups: true, supervisors: true } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return cpis.map((cpi) => ({ ...cpi, requestStatus: requestedBy.get(cpi.id) ?? null }));
+}
+
+// A lecturer asking to be made a supervisor on a course they found. The note is
+// what the coordinator reads when deciding.
+export async function requestToSupervise(userId: string, cpiId: string, note?: string) {
+  const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
+  if (!cpi) throw new AuthError(404, "CPI not found");
+
+  const policy = await loadPolicy(cpiId);
+  if (!policy.allowSupervisorSelfRequest) {
+    throw new AuthError(409, "This course does not accept requests to supervise");
+  }
+
+  const lecturer = await loadApprovedLecturer(userId);
+  const requester = await prisma.user.findUniqueOrThrow({
+    where: { id: userId },
+    select: { fullName: true, email: true },
+  });
+
+  const existingRole = await prisma.cpiSupervisor.findUnique({
+    where: { courseInstanceId_lecturerId: { courseInstanceId: cpiId, lecturerId: lecturer.id } },
+  });
+  if (existingRole) throw new AuthError(409, "You are already invited or accepted on this course");
+
+  const existing = await prisma.supervisorRequest.findUnique({
+    where: { courseInstanceId_lecturerId: { courseInstanceId: cpiId, lecturerId: lecturer.id } },
+  });
+  if (existing && existing.status === "PENDING") {
+    throw new AuthError(409, "You already have a pending request for this course");
+  }
+
+  // A rejected request can be made again — circumstances change.
+  const requestRow = existing
+    ? await prisma.supervisorRequest.update({
+        where: { id: existing.id },
+        data: { status: "PENDING", note: note ?? null, decidedById: null, decidedAt: null },
+      })
+    : await prisma.supervisorRequest.create({
+        data: { courseInstanceId: cpiId, lecturerId: lecturer.id, note: note ?? null },
+      });
+
+  await notify(cpi.createdById, {
+    type: "SUPERVISOR_REQUESTED",
+    title: "A lecturer asked to supervise",
+    body: `${requester.fullName || requester.email} asked to supervise in "${cpi.name}".${note ? ` Note: ${note}` : ""}`,
+    courseInstanceId: cpiId,
+  });
+
+  return requestRow;
+}
+
+export async function listSupervisorRequests(coordinatorUserId: string, cpiId: string) {
+  await loadOwnedCpi(coordinatorUserId, cpiId);
+  return prisma.supervisorRequest.findMany({
+    where: { courseInstanceId: cpiId },
+    orderBy: { createdAt: "desc" },
+    include: { lecturer: { include: { user: { select: { id: true, email: true, fullName: true } } } } },
+  });
+}
+
+// Approving promotes the request into a real supervisor invitation, which the
+// lecturer still has to accept — they asked to be considered, not to be enrolled.
+export async function decideSupervisorRequest(
+  coordinatorUserId: string,
+  cpiId: string,
+  requestId: string,
+  decision: "APPROVE" | "REJECT",
+) {
+  const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
+
+  const requestRow = await prisma.supervisorRequest.findUnique({
+    where: { id: requestId },
+    include: { lecturer: { include: { user: true } } },
+  });
+  if (!requestRow || requestRow.courseInstanceId !== cpiId) {
+    throw new AuthError(404, "Request not found in this CPI");
+  }
+  if (requestRow.status !== "PENDING") {
+    throw new AuthError(409, `That request was already ${requestRow.status.toLowerCase()}`);
+  }
+
+  const decided = await prisma.supervisorRequest.update({
+    where: { id: requestId },
+    data: {
+      status: decision === "APPROVE" ? "APPROVED" : "REJECTED",
+      decidedById: coordinatorUserId,
+      decidedAt: new Date(),
+    },
+  });
+
+  if (decision === "APPROVE") {
+    await prisma.cpiSupervisor.upsert({
+      where: { courseInstanceId_lecturerId: { courseInstanceId: cpiId, lecturerId: requestRow.lecturerId } },
+      update: {},
+      create: { courseInstanceId: cpiId, lecturerId: requestRow.lecturerId },
+    });
+  }
+
+  await notify(requestRow.lecturer.userId, {
+    type: decision === "APPROVE" ? "SUPERVISOR_REQUEST_APPROVED" : "SUPERVISOR_REQUEST_REJECTED",
+    title: decision === "APPROVE" ? "Your request to supervise was approved" : "Your request to supervise was declined",
+    body:
+      decision === "APPROVE"
+        ? `You have been invited to supervise in "${cpi.name}" — accept the invitation to join.`
+        : `Your request to supervise in "${cpi.name}" was not taken up.`,
+    courseInstanceId: cpiId,
+    email: true,
+  });
+
+  return decided;
 }
 
 // CPIs a student can open: those in their department, plus any they've joined.
