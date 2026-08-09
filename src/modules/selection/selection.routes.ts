@@ -4,10 +4,10 @@ import { requireAuth } from "../../middleware/auth";
 import { blockIfPasswordChangeRequired } from "../../middleware/forcePasswordChange";
 import { requirePhase } from "../../middleware/phase";
 import {
-  expressInterestSchema,
   ideaRefSchema,
   respondSelectionSchema,
   selectProjectSchema,
+  withdrawInterestSchema,
 } from "./selection.schemas";
 import * as selection from "./selection.service";
 
@@ -21,8 +21,43 @@ const inSelection = requirePhase(CpiPhase.PROJECT_SELECTION);
 
 selectionRouter.post("/interest", ...authed, inSelection, async (req, res, next) => {
   try {
-    const { ideaId, rank } = expressInterestSchema.parse(req.body);
-    return res.status(201).json(await selection.expressInterest(req.user!.user_id, req.params.cpiId, ideaId, rank));
+    const { ideaId } = ideaRefSchema.parse(req.body);
+    return res.status(201).json(await selection.expressInterest(req.user!.user_id, req.params.cpiId, ideaId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// The mirror image of a group expressing interest: a lecturer says they would
+// like to take on a group's idea.
+selectionRouter.post("/lecturer-interest", ...authed, inSelection, async (req, res, next) => {
+  try {
+    const { ideaId } = ideaRefSchema.parse(req.body);
+    return res
+      .status(201)
+      .json(await selection.expressLecturerInterest(req.user!.user_id, req.params.cpiId, ideaId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+selectionRouter.post("/co-supervision-interest", ...authed, inSelection, async (req, res, next) => {
+  try {
+    const { ideaId } = ideaRefSchema.parse(req.body);
+    return res
+      .status(201)
+      .json(await selection.expressCoSupervisionInterest(req.user!.user_id, req.params.cpiId, ideaId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Withdrawal is gated to the phase like every other EOI action, so interest
+// freezes when selection closes.
+selectionRouter.delete("/interest/:ideaId", ...authed, inSelection, async (req, res, next) => {
+  try {
+    const { type } = withdrawInterestSchema.parse(req.query);
+    return res.json(await selection.withdrawInterest(req.user!.user_id, req.params.cpiId, req.params.ideaId, type));
   } catch (err) {
     return next(err);
   }

@@ -27,21 +27,20 @@ export async function generateAllocations(coordinatorUserId: string, cpiId: stri
     where: { courseInstanceId: cpiId, status: SelectionStatus.ACCEPTED },
   });
 
-  let created = 0;
-  for (const sel of accepted) {
-    const existing = await prisma.projectAllocation.findUnique({ where: { groupId: sel.groupId } });
-    if (existing) continue;
-    await prisma.projectAllocation.create({
-      data: {
-        courseInstanceId: cpiId,
-        groupId: sel.groupId,
-        ideaId: sel.ideaId,
-        supervisorLecturerId: sel.supervisorLecturerId,
-        source: AllocationSource.FROM_SELECTION,
-      },
-    });
-    created++;
-  }
+  // One insert with skipDuplicates instead of a read-then-create loop: the loop
+  // raced against itself and against coordinator overrides, and a duplicate
+  // group surfaced as an unmapped unique violation — an HTTP 500 rather than a
+  // conflict. Existing allocations (e.g. overrides) are left untouched.
+  const { count: created } = await prisma.projectAllocation.createMany({
+    data: accepted.map((sel) => ({
+      courseInstanceId: cpiId,
+      groupId: sel.groupId,
+      ideaId: sel.ideaId,
+      supervisorLecturerId: sel.supervisorLecturerId,
+      source: AllocationSource.FROM_SELECTION,
+    })),
+    skipDuplicates: true,
+  });
 
   return { created, ...(await getAllocationMap(coordinatorUserId, cpiId)) };
 }
@@ -174,9 +173,18 @@ export async function finalizeAllocations(coordinatorUserId: string, cpiId: stri
       );
     }
   }
-  const updated = await prisma.courseInstance.update({
-    where: { id: cpiId },
+  // Conditional write: only finalize a course that is still open, so two
+  // coordinators clicking at once cannot both "finalize" and both notify.
+  const locked = await prisma.courseInstance.updateMany({
+    where: { id: cpiId, allocationsFinalizedAt: null },
     data: { allocationsFinalizedAt: new Date() },
+  });
+  if (locked.count === 0) {
+    throw new AuthError(409, "Allocations were already finalized");
+  }
+
+  const updated = await prisma.courseInstance.findUniqueOrThrow({
+    where: { id: cpiId },
     select: { id: true, allocationsFinalizedAt: true },
   });
 

@@ -145,8 +145,8 @@ describe("Week 5: Supervisor-Led — ranked interest, select, supervisor accepts
     expect(respond.body.status).toBe("ACCEPTED");
   });
 
-  it("rejects a 4th ranked interest and a duplicate rank", async () => {
-    const cpiId = await createCpi("SL Rank Guards CPI");
+  it("caps interest at the course's limit, and withdrawing frees a slot", async () => {
+    const cpiId = await createCpi("SL Interest Cap CPI");
     await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);
     await createGroup(cpiId, "s1", "Group A");
     await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
@@ -156,13 +156,24 @@ describe("Week 5: Supervisor-Led — ranked interest, select, supervisor accepts
     const i2 = await postIdea(cpiId, "sup", "I2");
     const i3 = await postIdea(cpiId, "sup", "I3");
     const i4 = await postIdea(cpiId, "sup", "I4");
+    // Interest is flat now — no ranking. The cap is a course setting rather than
+    // a hard-coded 3, so set it explicitly.
+    await request(app).patch(`/courses/${cpiId}/policy`).set(as("coord")).send({ maxInterestsPerGroup: 3 }).expect(200);
     await openPhase(cpiId, CpiPhase.PROJECT_SELECTION);
 
-    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i1, rank: 1 }).expect(201);
-    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i2, rank: 2 }).expect(201);
-    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i3, rank: 3 }).expect(201);
-    // 4th distinct project -> over the cap.
-    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i4, rank: 2 }).expect(409);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i1 }).expect(201);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i2 }).expect(201);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i3 }).expect(201);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i4 }).expect(409);
+
+    // Withdrawing one frees the slot — impossible before, because interest was
+    // write-once and the counter counted rows that could never be removed.
+    await request(app)
+      .delete(`/courses/${cpiId}/selection/interest/${i2}`)
+      .query({ type: "GROUP_INTEREST" })
+      .set(as("s1"))
+      .expect(200);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i4 }).expect(201);
   });
 });
 

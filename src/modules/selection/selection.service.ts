@@ -1,5 +1,6 @@
 import {
   EoiType,
+  Prisma,
   Group,
   IdeaApprovalStatus,
   IdeaAuthorType,
@@ -7,6 +8,7 @@ import {
 } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
+import { notify, notifyMany } from "../notifications/notifications.service";
 import { getAcceptedSupervisorLecturerId, loadPolicy } from "../shared/cpiMembership";
 
 async function loadCpi(cpiId: string) {
@@ -23,6 +25,33 @@ async function assertInterestEnabled(cpiId: string) {
     throw new AuthError(409, "Expression of interest is not enabled for this course");
   }
   return policy;
+}
+
+async function requireApprovedLecturerId(userId: string) {
+  const lecturer = await prisma.lecturer.findUnique({ where: { userId } });
+  if (!lecturer || lecturer.approvalStatus !== "APPROVED") {
+    throw new AuthError(403, "Only an approved lecturer can perform this action");
+  }
+  return lecturer.id;
+}
+
+async function assertUnderInterestCap(
+  policy: { maxInterestsPerGroup: number | null },
+  where: { groupId: string; type: EoiType },
+) {
+  if (policy.maxInterestsPerGroup === null) return;
+  const count = await prisma.interestExpression.count({ where: { ...where, withdrawnAt: null } });
+  if (count >= policy.maxInterestsPerGroup) {
+    throw new AuthError(409, `This course allows interest in at most ${policy.maxInterestsPerGroup} project(s)`);
+  }
+}
+
+function reviveOrCreateLecturerInterest(cpiId: string, ideaId: string, lecturerId: string, type: EoiType) {
+  return prisma.interestExpression.upsert({
+    where: { supervisorLecturerId_ideaId_type: { supervisorLecturerId: lecturerId, ideaId, type } },
+    update: { withdrawnAt: null },
+    create: { courseInstanceId: cpiId, ideaId, type, supervisorLecturerId: lecturerId },
+  });
 }
 
 // Group-level selection actions are driven by the group leader.
@@ -46,39 +75,93 @@ async function loadIdeaInCpi(ideaId: string, cpiId: string) {
   return idea;
 }
 
-// --- EOI: ranked interest (group -> supervisor idea) ---
+// --- EOI: a group is interested in a posted idea ---
 
-export async function expressInterest(userId: string, cpiId: string, ideaId: string, rank: number) {
+// Flat interest, no ranking. A group says "we would like this one" as many times
+// as the policy allows; there is no order of preference to honour, which is also
+// what makes first-come acceptance fair later.
+export async function expressInterest(userId: string, cpiId: string, ideaId: string) {
   await loadCpi(cpiId);
-  await assertInterestEnabled(cpiId);
+  const policy = await assertInterestEnabled(cpiId);
   const group = await loadLeaderGroup(userId, cpiId);
   const idea = await loadIdeaInCpi(ideaId, cpiId);
-  if (idea.authorType !== IdeaAuthorType.SUPERVISOR) {
-    throw new AuthError(400, "Ranked interest can only target supervisor-posted ideas");
+  if (idea.groupId === group.id) {
+    throw new AuthError(400, "That is your own group's idea — use seek-a-supervisor instead");
   }
 
-  const existingForIdea = await prisma.interestExpression.findUnique({
+  const existing = await prisma.interestExpression.findUnique({
     where: { groupId_ideaId_type: { groupId: group.id, ideaId, type: EoiType.GROUP_INTEREST } },
   });
-
-  // rank must be unique within the group (no two projects at the same rank).
-  const rankClash = await prisma.interestExpression.findFirst({
-    where: { groupId: group.id, type: EoiType.GROUP_INTEREST, rank, ideaId: { not: ideaId } },
-  });
-  if (rankClash) throw new AuthError(409, `Your group already ranked another project #${rank}`);
-
-  if (existingForIdea) {
-    return prisma.interestExpression.update({ where: { id: existingForIdea.id }, data: { rank } });
+  // Re-expressing after a withdrawal revives the row rather than colliding with
+  // it, which is why withdrawal is soft.
+  if (existing) {
+    if (!existing.withdrawnAt) return existing;
+    return prisma.interestExpression.update({ where: { id: existing.id }, data: { withdrawnAt: null } });
   }
 
-  const count = await prisma.interestExpression.count({
-    where: { groupId: group.id, type: EoiType.GROUP_INTEREST },
-  });
-  if (count >= 3) throw new AuthError(409, "A group may express interest in at most 3 projects");
+  await assertUnderInterestCap(policy, { groupId: group.id, type: EoiType.GROUP_INTEREST });
 
   return prisma.interestExpression.create({
-    data: { courseInstanceId: cpiId, ideaId, type: EoiType.GROUP_INTEREST, groupId: group.id, rank },
+    data: { courseInstanceId: cpiId, ideaId, type: EoiType.GROUP_INTEREST, groupId: group.id },
   });
+}
+
+// --- EOI: a lecturer is interested in a group's idea (the mirror image) ---
+
+export async function expressLecturerInterest(userId: string, cpiId: string, ideaId: string) {
+  await loadCpi(cpiId);
+  const policy = await assertInterestEnabled(cpiId);
+  if (!policy.allowLecturerInterestInGroupIdeas) {
+    throw new AuthError(409, "Lecturers may not express interest in group ideas on this course");
+  }
+
+  const lecturerId = await requireApprovedLecturerId(userId);
+  const idea = await loadIdeaInCpi(ideaId, cpiId);
+  if (idea.authorType !== IdeaAuthorType.STUDENT) {
+    throw new AuthError(400, "That is not a group-posted idea");
+  }
+
+  return reviveOrCreateLecturerInterest(cpiId, ideaId, lecturerId, EoiType.LECTURER_INTEREST);
+}
+
+// --- EOI: a lecturer offers to co-supervise someone else's idea ---
+
+export async function expressCoSupervisionInterest(userId: string, cpiId: string, ideaId: string) {
+  await loadCpi(cpiId);
+  const policy = await assertInterestEnabled(cpiId);
+  if (!policy.allowCoSupervisionInterest) {
+    throw new AuthError(409, "Co-supervision interest is not enabled on this course");
+  }
+
+  const lecturerId = await requireApprovedLecturerId(userId);
+  const idea = await loadIdeaInCpi(ideaId, cpiId);
+  if (idea.authorUserId === userId) {
+    throw new AuthError(400, "That is your own idea");
+  }
+
+  return reviveOrCreateLecturerInterest(cpiId, ideaId, lecturerId, EoiType.CO_SUPERVISION_INTEREST);
+}
+
+// Withdrawal is soft: the row stays so the audit trail survives and the unique
+// pair still holds if the same interest is expressed again. Refused once the
+// selection phase closes — the route's phase gate does that, and this guard
+// covers the policy switch.
+export async function withdrawInterest(userId: string, cpiId: string, ideaId: string, type: EoiType) {
+  const policy = await loadPolicy(cpiId);
+  if (!policy.allowInterestWithdrawal) {
+    throw new AuthError(409, "Interest cannot be withdrawn on this course");
+  }
+
+  const where =
+    type === EoiType.GROUP_INTEREST || type === EoiType.SEEKING_SUPERVISOR
+      ? { groupId: (await loadLeaderGroup(userId, cpiId)).id, ideaId, type }
+      : { supervisorLecturerId: await requireApprovedLecturerId(userId), ideaId, type };
+
+  const existing = await prisma.interestExpression.findFirst({ where: { ...where, courseInstanceId: cpiId } });
+  if (!existing) throw new AuthError(404, "No such interest to withdraw");
+  if (existing.withdrawnAt) return existing;
+
+  return prisma.interestExpression.update({ where: { id: existing.id }, data: { withdrawnAt: new Date() } });
 }
 
 // --- EOI: group flags its own idea as seeking a supervisor ---
@@ -94,7 +177,7 @@ export async function markSeekingSupervisor(userId: string, cpiId: string, ideaI
 
   return prisma.interestExpression.upsert({
     where: { groupId_ideaId_type: { groupId: group.id, ideaId, type: EoiType.SEEKING_SUPERVISOR } },
-    update: {},
+    update: { withdrawnAt: null },
     create: { courseInstanceId: cpiId, ideaId, type: EoiType.SEEKING_SUPERVISOR, groupId: group.id },
   });
 }
@@ -112,13 +195,13 @@ export async function markWilling(userId: string, cpiId: string, ideaId: string)
     throw new AuthError(400, "Willingness can only be marked on a student idea");
   }
   const seeking = await prisma.interestExpression.findFirst({
-    where: { ideaId, type: EoiType.SEEKING_SUPERVISOR },
+    where: { ideaId, type: EoiType.SEEKING_SUPERVISOR, withdrawnAt: null },
   });
   if (!seeking) throw new AuthError(400, "That idea is not seeking a supervisor");
 
   return prisma.interestExpression.upsert({
     where: { supervisorLecturerId_ideaId_type: { supervisorLecturerId: lecturerId, ideaId, type: EoiType.SUPERVISOR_WILLING } },
-    update: {},
+    update: { withdrawnAt: null },
     create: { courseInstanceId: cpiId, ideaId, type: EoiType.SUPERVISOR_WILLING, supervisorLecturerId: lecturerId },
   });
 }
@@ -131,7 +214,7 @@ export async function selectProject(
   ideaId: string,
   supervisorUserId?: string,
 ) {
-  await loadCpi(cpiId);
+  const cpi = await loadCpi(cpiId);
   const group = await loadLeaderGroup(userId, cpiId);
   const idea = await loadIdeaInCpi(ideaId, cpiId);
 
@@ -185,9 +268,42 @@ export async function selectProject(
     }
   }
 
-  return prisma.projectSelection.create({
-    data: { courseInstanceId: cpiId, groupId: group.id, ideaId, supervisorLecturerId },
-  });
+  // The "one active selection per group" check and the write have to be one
+  // step. Read-then-write let two concurrent selects both pass, which is how a
+  // group ended up with two pending selections and two supervisors each able to
+  // accept. A partial unique index backs this up at the database level.
+  try {
+    const selection = await prisma.projectSelection.create({
+      data: { courseInstanceId: cpiId, groupId: group.id, ideaId, supervisorLecturerId },
+    });
+
+    if (supervisorLecturerId) {
+      const supervisor = await prisma.lecturer.findUnique({ where: { id: supervisorLecturerId } });
+      if (supervisor) {
+        await notify(supervisor.userId, {
+          type: "SELECTION_SUBMITTED",
+          title: "A group selected your project",
+          body: `"${group.name}" selected "${idea.title}" and is waiting for your response.`,
+          courseInstanceId: cpiId,
+          email: true,
+        });
+      }
+    } else {
+      await notify(cpi.createdById, {
+        type: "SELECTION_SUBMITTED",
+        title: "A group made its project selection",
+        body: `"${group.name}" selected "${idea.title}" and is waiting for confirmation.`,
+        courseInstanceId: cpiId,
+      });
+    }
+
+    return selection;
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
+      throw new AuthError(409, "Your group already has a selection awaiting a response");
+    }
+    throw err;
+  }
 }
 
 export async function respondToSelection(
@@ -222,13 +338,42 @@ export async function respondToSelection(
     throw new AuthError(403, "You are not the confirmer for this selection");
   }
 
-  return prisma.projectSelection.update({
-    where: { id: selectionId },
-    data: {
-      status: decision === "ACCEPT" ? SelectionStatus.ACCEPTED : SelectionStatus.DECLINED,
-      respondedAt: new Date(),
-    },
+  // Conditional write: only a selection still PENDING is changed. Two people
+  // responding at the same moment previously both succeeded, last-write-wins.
+  // Now exactly one updates a row and the other is told so.
+  const outcome = decision === "ACCEPT" ? SelectionStatus.ACCEPTED : SelectionStatus.DECLINED;
+  const changed = await prisma.projectSelection.updateMany({
+    where: { id: selectionId, status: SelectionStatus.PENDING },
+    data: { status: outcome, respondedAt: new Date() },
   });
+  if (changed.count === 0) {
+    throw new AuthError(409, "Someone already responded to this selection");
+  }
+
+  const updated = await prisma.projectSelection.findUnique({
+    where: { id: selectionId },
+    include: { group: { select: { id: true, name: true } }, idea: { select: { title: true } } },
+  });
+
+  const members = await prisma.groupMember.findMany({
+    where: { groupId: selection.groupId, status: "ACCEPTED" },
+    include: { student: { select: { userId: true } } },
+  });
+  await notifyMany(
+    members.map((m) => m.student.userId),
+    {
+      type: decision === "ACCEPT" ? "SELECTION_ACCEPTED" : "SELECTION_DECLINED",
+      title: decision === "ACCEPT" ? "Your project was confirmed" : "Your project selection was declined",
+      body:
+        decision === "ACCEPT"
+          ? `"${updated?.idea.title}" is confirmed for your group.`
+          : `"${updated?.idea.title}" was declined. You can select another project.`,
+      courseInstanceId: cpiId,
+      email: true,
+    },
+  );
+
+  return updated;
 }
 
 // Scoped view of the selection state for the requester.
@@ -288,7 +433,7 @@ export async function getSelectionState(userId: string, cpiId: string) {
     prisma.interestExpression.findMany({
       where: { groupId: membership.groupId },
       include: eoiInclude,
-      orderBy: { rank: "asc" },
+      orderBy: { createdAt: "asc" },
     }),
     // Supervisors who marked willing on this group's own ideas.
     prisma.interestExpression.findMany({
