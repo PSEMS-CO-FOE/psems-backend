@@ -8,3 +8,6 @@ export const postIdeaSchema = z.object({
 export const requestRevisionSchema = z.object({
   note: z.string().trim().min(1).max(1000),
 });
+
+export const coSupervisorSchema = z.object({ lecturerUserId: z.string().uuid() });
+export const respondCoSupervisorSchema = z.object({ decision: z.enum(["ACCEPT", "DECLINE"]) });

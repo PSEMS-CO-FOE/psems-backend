@@ -2,7 +2,7 @@ import { IdeaApprovalStatus, IdeaAuthorType, IdeaVisibility } from "@prisma/clie
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
-import { notifyMany } from "../notifications/notifications.service";
+import { notify, notifyMany } from "../notifications/notifications.service";
 import {
   getAcceptedSupervisorLecturerId,
   getLeaderGroupId,
@@ -31,13 +31,40 @@ export async function postIdea(userId: string, cpiId: string, title: string, des
     });
   }
 
-  if (await getAcceptedSupervisorLecturerId(userId, cpiId)) {
+  const supervisorLecturerId = await getAcceptedSupervisorLecturerId(userId, cpiId);
+  if (supervisorLecturerId) {
     if (!policy.allowSupervisorIdeas) {
       throw new AuthError(403, "This course does not accept supervisor-posted ideas");
     }
     return prisma.projectIdea.create({
-      data: { ...base, authorType: IdeaAuthorType.SUPERVISOR, visibility: IdeaVisibility.PUBLIC_TO_STUDENTS },
+      data: {
+        ...base,
+        authorType: IdeaAuthorType.SUPERVISOR,
+        visibility: IdeaVisibility.PUBLIC_TO_STUDENTS,
+        // The author is the primary supervisor; co-supervisors are added to this
+        // list afterwards and must accept.
+        supervisors: { create: { lecturerId: supervisorLecturerId, isPrimary: true, invitationStatus: "ACCEPTED", respondedAt: new Date() } },
+      },
+      include: ideaInclude,
     });
+  }
+
+  // A lecturer who is not (yet) a supervisor on this course may still post, when
+  // the course allows it — that is how a lecturer advertises a project before
+  // being formally attached to the course.
+  if (policy.allowLecturerIdeas) {
+    const lecturer = await prisma.lecturer.findUnique({ where: { userId } });
+    if (lecturer && lecturer.approvalStatus === "APPROVED") {
+      return prisma.projectIdea.create({
+        data: {
+          ...base,
+          authorType: IdeaAuthorType.LECTURER,
+          visibility: IdeaVisibility.PUBLIC_TO_STUDENTS,
+          supervisors: { create: { lecturerId: lecturer.id, isPrimary: true, invitationStatus: "ACCEPTED", respondedAt: new Date() } },
+        },
+        include: ideaInclude,
+      });
+    }
   }
 
   // A group's idea is posted by its leader, so one member cannot commit the
@@ -105,11 +132,104 @@ export async function listIdeas(userId: string, cpiId: string) {
   return prisma.projectIdea.findMany({
     where,
     orderBy: { createdAt: "desc" },
-    include: {
-      author: { select: { email: true, fullName: true } },
-      group: { select: { id: true, name: true } },
+    include: ideaInclude,
+  });
+}
+
+// Shown on every idea so a group can see who would supervise them — the primary
+// plus any co-supervisor who has accepted or is still deciding.
+const ideaInclude = {
+  author: { select: { id: true, email: true, fullName: true } },
+  group: { select: { id: true, name: true } },
+  supervisors: {
+    include: { lecturer: { include: { user: { select: { id: true, email: true, fullName: true } } } } },
+    orderBy: { isPrimary: "desc" },
+  },
+} as const;
+
+async function loadIdeaForAuthor(userId: string, cpiId: string, ideaId: string) {
+  const idea = await prisma.projectIdea.findUnique({ where: { id: ideaId }, include: { supervisors: true } });
+  if (!idea || idea.courseInstanceId !== cpiId) throw new AuthError(404, "Idea not found in this CPI");
+
+  const lecturer = await prisma.lecturer.findUnique({ where: { userId } });
+  const isPrimary = Boolean(
+    lecturer && idea.supervisors.some((sup) => sup.lecturerId === lecturer.id && sup.isPrimary),
+  );
+  if (!isPrimary) throw new AuthError(403, "Only the idea's own supervisor can change its supervisor list");
+  return idea;
+}
+
+// Name a co-supervisor on an idea. They are invited, not assumed — the invite
+// sits PENDING until they accept, and groups see that state.
+export async function addIdeaCoSupervisor(userId: string, cpiId: string, ideaId: string, lecturerUserId: string) {
+  const policy = await loadPolicy(cpiId);
+  if (!policy.allowCoSupervisorOnIdea) {
+    throw new AuthError(409, "This course does not allow co-supervisors on ideas");
+  }
+  const idea = await loadIdeaForAuthor(userId, cpiId, ideaId);
+
+  const invitee = await prisma.lecturer.findUnique({ where: { userId: lecturerUserId } });
+  if (!invitee || invitee.approvalStatus !== "APPROVED") {
+    throw new AuthError(400, "That lecturer is not approved on this system");
+  }
+  if (idea.supervisors.some((sup) => sup.lecturerId === invitee.id)) {
+    throw new AuthError(409, "That lecturer is already on this idea");
+  }
+
+  const created = await prisma.ideaSupervisor.create({
+    data: { ideaId, lecturerId: invitee.id },
+    include: { lecturer: { include: { user: { select: { id: true, email: true, fullName: true } } } } },
+  });
+
+  await notify(lecturerUserId, {
+    type: "CO_SUPERVISOR_INVITED",
+    title: "Invitation to co-supervise",
+    body: `You have been invited to co-supervise "${idea.title}".`,
+    courseInstanceId: cpiId,
+    email: true,
+  });
+
+  return created;
+}
+
+export async function respondToIdeaSupervisorInvite(
+  userId: string,
+  cpiId: string,
+  ideaId: string,
+  decision: "ACCEPT" | "DECLINE",
+) {
+  const lecturer = await prisma.lecturer.findUnique({ where: { userId } });
+  if (!lecturer) throw new AuthError(403, "Only a lecturer can respond to this invitation");
+
+  const idea = await prisma.projectIdea.findUnique({ where: { id: ideaId } });
+  if (!idea || idea.courseInstanceId !== cpiId) throw new AuthError(404, "Idea not found in this CPI");
+
+  const row = await prisma.ideaSupervisor.findUnique({
+    where: { ideaId_lecturerId: { ideaId, lecturerId: lecturer.id } },
+  });
+  if (!row) throw new AuthError(404, "You have not been invited to co-supervise this idea");
+  if (row.isPrimary) throw new AuthError(409, "You are this idea's own supervisor");
+  if (row.invitationStatus !== "PENDING") {
+    throw new AuthError(409, `You already ${row.invitationStatus.toLowerCase()} this invitation`);
+  }
+
+  return prisma.ideaSupervisor.update({
+    where: { id: row.id },
+    data: {
+      invitationStatus: decision === "ACCEPT" ? "ACCEPTED" : "DECLINED",
+      respondedAt: new Date(),
     },
   });
+}
+
+export async function removeIdeaCoSupervisor(userId: string, cpiId: string, ideaId: string, coSupervisorId: string) {
+  const idea = await loadIdeaForAuthor(userId, cpiId, ideaId);
+  const row = idea.supervisors.find((sup) => sup.id === coSupervisorId);
+  if (!row) throw new AuthError(404, "That co-supervisor is not on this idea");
+  if (row.isPrimary) throw new AuthError(409, "The idea's own supervisor cannot be removed");
+
+  await prisma.ideaSupervisor.delete({ where: { id: coSupervisorId } });
+  return { removed: coSupervisorId };
 }
 
 // A student edits their group's own idea and resubmits it. Allowed while the

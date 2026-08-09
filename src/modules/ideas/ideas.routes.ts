@@ -4,7 +4,12 @@ import { requireAuth } from "../../middleware/auth";
 import { blockIfPasswordChangeRequired } from "../../middleware/forcePasswordChange";
 import { requirePhase } from "../../middleware/phase";
 import { requireRole } from "../../middleware/role";
-import { postIdeaSchema, requestRevisionSchema } from "./ideas.schemas";
+import {
+  coSupervisorSchema,
+  postIdeaSchema,
+  requestRevisionSchema,
+  respondCoSupervisorSchema,
+} from "./ideas.schemas";
 import * as ideas from "./ideas.service";
 
 export const ideasRouter = Router({ mergeParams: true });
@@ -47,6 +52,45 @@ ideasRouter.post("/:ideaId/request-revision", ...authed, inIdeaAnnouncement, asy
   try {
     const { note } = requestRevisionSchema.parse(req.body);
     return res.json(await ideas.requestIdeaRevision(req.user!.user_id, req.params.cpiId, req.params.ideaId, note));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Co-supervisors are named by the idea's own supervisor and must accept, so a
+// group always sees who has actually agreed to take them on.
+ideasRouter.post("/:ideaId/co-supervisors", ...authed, inIdeaAnnouncement, async (req, res, next) => {
+  try {
+    const { lecturerUserId } = coSupervisorSchema.parse(req.body);
+    return res
+      .status(201)
+      .json(await ideas.addIdeaCoSupervisor(req.user!.user_id, req.params.cpiId, req.params.ideaId, lecturerUserId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+ideasRouter.post("/:ideaId/co-supervisors/respond", ...authed, inIdeaAnnouncement, async (req, res, next) => {
+  try {
+    const { decision } = respondCoSupervisorSchema.parse(req.body);
+    return res.json(
+      await ideas.respondToIdeaSupervisorInvite(req.user!.user_id, req.params.cpiId, req.params.ideaId, decision),
+    );
+  } catch (err) {
+    return next(err);
+  }
+});
+
+ideasRouter.delete("/:ideaId/co-supervisors/:coSupervisorId", ...authed, inIdeaAnnouncement, async (req, res, next) => {
+  try {
+    return res.json(
+      await ideas.removeIdeaCoSupervisor(
+        req.user!.user_id,
+        req.params.cpiId,
+        req.params.ideaId,
+        req.params.coSupervisorId,
+      ),
+    );
   } catch (err) {
     return next(err);
   }
