@@ -108,6 +108,7 @@ enum IdeaAuthorType {
   SUPERVISOR
   COORDINATOR
   STUDENT
+  LECTURER
 }
 
 // Visibility class, set from author type at creation. PUBLIC_TO_STUDENTS =
@@ -128,15 +129,38 @@ enum IdeaApprovalStatus {
   REVISION_REQUESTED
 }
 
-// The three kinds of Expression of Interest at Project Selection (spec 3.3
-// Step 6 / table interest_expressions):
-//   GROUP_INTEREST     — a group ranks a supervisor-posted idea (rank 1–3)
-//   SEEKING_SUPERVISOR — a group flags its OWN idea, inviting supervisors
-//   SUPERVISOR_WILLING — a supervisor marks willingness on a student idea
+// Expression of Interest at Project Selection (spec 3.3 Step 6 / table
+// interest_expressions). Interest is a flat expression — no ranking. A group or a lecturer may express
+// as many as the policy allows, and withdraw while the phase is open.
+//   GROUP_INTEREST          — a group is interested in a posted idea
+//   SEEKING_SUPERVISOR      — a group flags its OWN idea, inviting supervisors
+//   SUPERVISOR_WILLING      — a supervisor is willing to supervise a group idea
+//   LECTURER_INTEREST       — a lecturer is interested in a group's idea
+//   CO_SUPERVISION_INTEREST — a lecturer offers to co-supervise another's idea
 enum EoiType {
   GROUP_INTEREST
   SEEKING_SUPERVISOR
   SUPERVISOR_WILLING
+  LECTURER_INTEREST
+  CO_SUPERVISION_INTEREST
+}
+
+enum SupervisorRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ProvisioningSubject {
+  STUDENT
+  LECTURER
+}
+
+enum ResearchOutputKind {
+  PUBLICATION
+  PROJECT
+  GRANT
+  OTHER
 }
 
 // Mutual-confirmation outcome for a group's chosen project (spec 3.3 Step 6 /
@@ -207,7 +231,7 @@ model User {
   lecturer             Lecturer?
   createdCpis          CourseInstance[]         @relation("CpiCreatedBy")
   auditLogs            AuditLog[]
-  provisioningLogs     StudentProvisioningLog[]
+  provisioningLogs     ProvisioningLog[]
   postedIdeas          ProjectIdea[]
   notifications        Notification[]
   panelSeats           SessionPanelist[]        @relation("PanelistUser")
@@ -215,6 +239,8 @@ model User {
   guestsInvited        GuestPanelist[]          @relation("GuestInvitedBy")
   sessionReviews       SessionReview[]          @relation("SessionReviewer")
   pooledShareDecisions PooledShareDecision[]    @relation("PooledShareDecidedBy")
+  profile              UserProfile?
+  supervisorDecisions  SupervisorRequest[]      @relation("SupervisorRequestDecidedBy")
 
   @@map("users")
 }
@@ -224,6 +250,9 @@ model Student {
   id                 String  @id @default(uuid())
   userId             String  @unique @map("user_id")
   studentId          String  @unique @map("student_id")
+  // Distinct from studentId: mark sheets carry both an index number and a
+  // registration number. Nullable — older records have only the index.
+  registrationNumber String? @unique @map("registration_number")
   department         String
   year               Int
   provisioningStatus String  @default("ACTIVE") @map("provisioning_status")
@@ -248,6 +277,8 @@ model Lecturer {
   user                  User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   cpiSupervisorRoles    CpiSupervisor[]
   cpiEvaluatorRoles     CpiEvaluator[]
+  ideaSupervisorRoles   IdeaSupervisor[]
+  supervisorRequests    SupervisorRequest[]
   willingExpressions    InterestExpression[]
   supervisorSelections  ProjectSelection[]
   supervisorAllocations ProjectAllocation[]
@@ -282,6 +313,7 @@ model CourseInstance {
   groups              Group[]
   ideas               ProjectIdea[]
   interestExpressions InterestExpression[]
+  supervisorRequests  SupervisorRequest[]
   projectSelections   ProjectSelection[]
   allocations         ProjectAllocation[]
   evaluationStages    EvaluationStage[]
@@ -447,6 +479,7 @@ model ProjectIdea {
   interestExpressions InterestExpression[]
   projectSelections   ProjectSelection[]
   allocations         ProjectAllocation[]
+  supervisors         IdeaSupervisor[]
 
   @@index([courseInstanceId])
   @@index([groupId])
@@ -463,18 +496,20 @@ model InterestExpression {
   ideaId               String   @map("idea_id")
   type                 EoiType
   groupId              String?  @map("group_id")
-  supervisorLecturerId String?  @map("supervisor_lecturer_id")
-  rank                 Int? // 1–3, only for GROUP_INTEREST
-  createdAt            DateTime @default(now()) @map("created_at")
+  supervisorLecturerId String?   @map("supervisor_lecturer_id")
+  // Soft withdrawal: the row stays so the audit trail survives and the unique
+  // pair still holds when the same interest is expressed again.
+  withdrawnAt          DateTime? @map("withdrawn_at")
+  createdAt            DateTime  @default(now()) @map("created_at")
 
   courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
   idea           ProjectIdea    @relation(fields: [ideaId], references: [id], onDelete: Cascade)
   group          Group?         @relation(fields: [groupId], references: [id], onDelete: Cascade)
   supervisor     Lecturer?      @relation(fields: [supervisorLecturerId], references: [id], onDelete: Cascade)
 
-  // A group ranks a given idea at most once; a supervisor is willing on a given
-  // idea at most once. (Partial semantics differ by type but the pair is unique
-  // either way since only one of group/supervisor is set.)
+  // A group expresses a given interest at most once; likewise a lecturer.
+  // (Semantics differ by type but the pair is unique either way, since only one
+  // of group/supervisor is set.)
   @@unique([groupId, ideaId, type])
   @@unique([supervisorLecturerId, ideaId, type])
   @@index([courseInstanceId])
@@ -505,6 +540,99 @@ model ProjectSelection {
   @@index([courseInstanceId])
   @@index([groupId])
   @@map("project_selections")
+}
+
+
+// Supervisors attached to an idea. The author is the primary; anyone else was
+// named by them (from the approved list, or invited) and must accept. Shown to
+// groups on the idea so they know who they would be working with.
+model IdeaSupervisor {
+  id               String           @id @default(uuid())
+  ideaId           String           @map("idea_id")
+  lecturerId       String           @map("lecturer_id")
+  isPrimary        Boolean          @default(false) @map("is_primary")
+  invitationStatus InvitationStatus @default(PENDING) @map("invitation_status")
+  invitedAt        DateTime         @default(now()) @map("invited_at")
+  respondedAt      DateTime?        @map("responded_at")
+
+  idea     ProjectIdea @relation(fields: [ideaId], references: [id], onDelete: Cascade)
+  lecturer Lecturer    @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+
+  @@unique([ideaId, lecturerId])
+  @@index([ideaId])
+  @@map("idea_supervisors")
+}
+
+// A lecturer asking a coordinator to make them a supervisor on a course they
+// found themselves. Deliberately its own model rather than another value on
+// InvitationStatus, which is shared with group membership.
+model SupervisorRequest {
+  id               String                  @id @default(uuid())
+  courseInstanceId String                  @map("course_instance_id")
+  lecturerId       String                  @map("lecturer_id")
+  status           SupervisorRequestStatus @default(PENDING)
+  note             String?
+  decidedById      String?                 @map("decided_by_id")
+  decidedAt        DateTime?               @map("decided_at")
+  createdAt        DateTime                @default(now()) @map("created_at")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  lecturer       Lecturer       @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  decidedBy      User?          @relation("SupervisorRequestDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@unique([courseInstanceId, lecturerId])
+  @@index([courseInstanceId])
+  @@map("supervisor_requests")
+}
+
+// Institution-wide directory profile. Visible to any logged-in user; guests
+// authenticating with a scoring link are deliberately excluded, since their
+// access is scoped to the sessions they mark.
+model UserProfile {
+  id           String   @id @default(uuid())
+  userId       String   @unique @map("user_id")
+  headline     String?
+  about        String?
+  department   String?
+  designation  String?
+  contactEmail String?  @map("contact_email")
+  links        Json?
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user      User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  interests ResearchInterest[]
+  outputs   ResearchOutput[]
+
+  @@map("user_profiles")
+}
+
+// Tagged research areas, so a student can filter supervisors by area instead of
+// reading every profile.
+model ResearchInterest {
+  id        String @id @default(uuid())
+  profileId String @map("profile_id")
+  area      String
+
+  profile UserProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, area])
+  @@index([area])
+  @@map("research_interests")
+}
+
+model ResearchOutput {
+  id        String             @id @default(uuid())
+  profileId String             @map("profile_id")
+  title     String
+  venue     String?
+  year      Int?
+  url       String?
+  kind      ResearchOutputKind @default(PUBLICATION)
+
+  profile UserProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@map("research_outputs")
 }
 
 // Finalized group ↔ project ↔ supervisor assignment (spec 3.3 Step 7 / table
@@ -889,12 +1017,14 @@ enum EmailDeliveryStatus {
   FAILED
 }
 
-// One row per student per bulk-provisioning batch (spec 2.2): records that
-// the credential email was dispatched and whether it arrived, so failed
-// deliveries can be flagged for System Admin review.
-model StudentProvisioningLog {
+// One row per provisioned account per bulk upload (spec 2.2): records that the
+// credential email was dispatched and whether it arrived, so failed deliveries
+// can be flagged for System Admin review. Shared by students and lecturers —
+// the pipeline is identical, only the subject differs.
+model ProvisioningLog {
   id             String              @id @default(uuid())
   batchId        String              @map("batch_id")
+  subjectType    ProvisioningSubject @default(STUDENT) @map("subject_type")
   userId         String              @map("user_id")
   email          String
   deliveryStatus EmailDeliveryStatus @default(QUEUED) @map("delivery_status")
@@ -906,7 +1036,7 @@ model StudentProvisioningLog {
 
   @@index([batchId])
   @@index([deliveryStatus])
-  @@map("student_provisioning_log")
+  @@map("provisioning_log")
 }
 
 // Aggregated mark per group per stage (spec 3.3 Step 11 / table final_marks).
