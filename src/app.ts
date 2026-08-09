@@ -10,11 +10,14 @@ import { coursesRouter } from "./modules/courses/courses.routes";
 import { evaluationsRouter } from "./modules/evaluations/evaluations.routes";
 import { filesRouter } from "./modules/files/files.routes";
 import { groupsRouter } from "./modules/groups/groups.routes";
-import { headjudgeRouter } from "./modules/headjudge/headjudge.routes";
 import { ideasRouter } from "./modules/ideas/ideas.routes";
 import { lecturersRouter } from "./modules/lecturers/lecturers.routes";
 import { marksRouter } from "./modules/marks/marks.routes";
 import { notificationsRouter } from "./modules/notifications/notifications.routes";
+import { guestRouter } from "./modules/panel/guest.routes";
+import { panelRouter } from "./modules/panel/panel.routes";
+import { policyRouter } from "./modules/policy/policy.routes";
+import { reviewRouter } from "./modules/review/review.routes";
 import { schedulingRouter } from "./modules/scheduling/scheduling.routes";
 import { scoringRouter } from "./modules/scoring/scoring.routes";
 import { selectionRouter } from "./modules/selection/selection.routes";
@@ -36,7 +39,11 @@ app.use("/users", usersRouter);
 app.use("/students", studentsRouter);
 app.use("/lecturers", lecturersRouter);
 app.use("/notifications", notificationsRouter);
+// Unauthenticated by design: a guest's one-time link is the credential, and it
+// grants nothing beyond scoring the sessions it names.
+app.use("/guest", guestRouter);
 app.use("/courses", coursesRouter);
+app.use("/courses/:cpiId/policy", policyRouter);
 app.use("/courses/:cpiId/groups", groupsRouter);
 app.use("/courses/:cpiId/ideas", ideasRouter);
 app.use("/courses/:cpiId/selection", selectionRouter);
@@ -46,6 +53,7 @@ app.use("/courses/:cpiId/marks", marksRouter);
 app.use("/courses/:cpiId", filesRouter);
 app.use("/courses/:cpiId", schedulingRouter);
 app.use("/courses/:cpiId", scoringRouter);
-app.use("/courses/:cpiId", headjudgeRouter);
+app.use("/courses/:cpiId", panelRouter);
+app.use("/courses/:cpiId", reviewRouter);
 
 app.use(errorHandler);

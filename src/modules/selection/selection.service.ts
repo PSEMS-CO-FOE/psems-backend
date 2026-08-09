@@ -1,5 +1,4 @@
 import {
-  CpiMode,
   EoiType,
   Group,
   IdeaApprovalStatus,
@@ -8,12 +7,22 @@ import {
 } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
-import { getAcceptedSupervisorLecturerId } from "../shared/cpiMembership";
+import { getAcceptedSupervisorLecturerId, loadPolicy } from "../shared/cpiMembership";
 
 async function loadCpi(cpiId: string) {
   const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
   if (!cpi) throw new AuthError(404, "CPI not found");
   return cpi;
+}
+
+// Expression of interest used to be Supervisor-Led only. It is now a policy
+// switch, so a coordinator-run course can use it too.
+async function assertInterestEnabled(cpiId: string) {
+  const policy = await loadPolicy(cpiId);
+  if (!policy.interestEnabled) {
+    throw new AuthError(409, "Expression of interest is not enabled for this course");
+  }
+  return policy;
 }
 
 // Group-level selection actions are driven by the group leader.
@@ -40,10 +49,8 @@ async function loadIdeaInCpi(ideaId: string, cpiId: string) {
 // --- EOI: ranked interest (group -> supervisor idea) ---
 
 export async function expressInterest(userId: string, cpiId: string, ideaId: string, rank: number) {
-  const cpi = await loadCpi(cpiId);
-  if (cpi.mode !== CpiMode.SUPERVISOR_LED) {
-    throw new AuthError(409, "Ranked interest applies only in Supervisor-Led mode");
-  }
+  await loadCpi(cpiId);
+  await assertInterestEnabled(cpiId);
   const group = await loadLeaderGroup(userId, cpiId);
   const idea = await loadIdeaInCpi(ideaId, cpiId);
   if (idea.authorType !== IdeaAuthorType.SUPERVISOR) {
@@ -77,10 +84,8 @@ export async function expressInterest(userId: string, cpiId: string, ideaId: str
 // --- EOI: group flags its own idea as seeking a supervisor ---
 
 export async function markSeekingSupervisor(userId: string, cpiId: string, ideaId: string) {
-  const cpi = await loadCpi(cpiId);
-  if (cpi.mode !== CpiMode.SUPERVISOR_LED) {
-    throw new AuthError(409, "Seeking a supervisor applies only in Supervisor-Led mode");
-  }
+  await loadCpi(cpiId);
+  await assertInterestEnabled(cpiId);
   const group = await loadLeaderGroup(userId, cpiId);
   const idea = await loadIdeaInCpi(ideaId, cpiId);
   if (idea.authorType !== IdeaAuthorType.STUDENT || idea.groupId !== group.id) {
@@ -97,10 +102,8 @@ export async function markSeekingSupervisor(userId: string, cpiId: string, ideaI
 // --- EOI: supervisor marks willingness on a student idea ---
 
 export async function markWilling(userId: string, cpiId: string, ideaId: string) {
-  const cpi = await loadCpi(cpiId);
-  if (cpi.mode !== CpiMode.SUPERVISOR_LED) {
-    throw new AuthError(409, "Willing-to-supervise applies only in Supervisor-Led mode");
-  }
+  await loadCpi(cpiId);
+  await assertInterestEnabled(cpiId);
   const lecturerId = await getAcceptedSupervisorLecturerId(userId, cpiId);
   if (!lecturerId) throw new AuthError(403, "Only an accepted supervisor of this CPI can mark willingness");
 
@@ -128,7 +131,7 @@ export async function selectProject(
   ideaId: string,
   supervisorUserId?: string,
 ) {
-  const cpi = await loadCpi(cpiId);
+  await loadCpi(cpiId);
   const group = await loadLeaderGroup(userId, cpiId);
   const idea = await loadIdeaInCpi(ideaId, cpiId);
 
@@ -146,16 +149,24 @@ export async function selectProject(
 
   let supervisorLecturerId: string | null = null;
 
-  if (cpi.mode === CpiMode.SUPERVISOR_LED) {
-    if (idea.authorType === IdeaAuthorType.SUPERVISOR) {
-      // The idea's author is the supervisor who must accept.
-      const authorLecturer = await prisma.lecturer.findUnique({ where: { userId: idea.authorUserId } });
-      supervisorLecturerId = authorLecturer!.id;
-    } else if (idea.authorType === IdeaAuthorType.STUDENT && idea.groupId === group.id) {
-      // Own idea: the group picks one WILLING supervisor (conflict resolution).
-      if (!supervisorUserId) {
-        throw new AuthError(400, "Selecting your own idea requires choosing a willing supervisor");
-      }
+  // Which supervisor (if any) a selection carries follows from the idea itself,
+  // not from the CPI's mode: a supervisor-posted idea brings its author, a
+  // group's own idea needs a willing supervisor named, and a coordinator-posted
+  // one carries none because the coordinator confirms it.
+  const policy = await loadPolicy(cpiId);
+
+  if (idea.authorType === IdeaAuthorType.SUPERVISOR) {
+    const authorLecturer = await prisma.lecturer.findUnique({ where: { userId: idea.authorUserId } });
+    if (!authorLecturer) throw new AuthError(409, "That idea's author is no longer a lecturer on this system");
+    supervisorLecturerId = authorLecturer.id;
+  } else if (idea.authorType === IdeaAuthorType.STUDENT) {
+    if (idea.groupId !== group.id) {
+      throw new AuthError(400, "You may only select a posted idea or your own group's idea");
+    }
+    if (policy.requireStudentIdeaApproval && idea.approvalStatus !== IdeaApprovalStatus.APPROVED) {
+      throw new AuthError(400, "Your group's idea must be approved before it can be selected");
+    }
+    if (supervisorUserId) {
       const chosen = await prisma.lecturer.findUnique({ where: { userId: supervisorUserId } });
       if (!chosen) throw new AuthError(404, "Chosen supervisor not found");
       const willing = await prisma.interestExpression.findUnique({
@@ -169,18 +180,8 @@ export async function selectProject(
       });
       if (!willing) throw new AuthError(400, "That supervisor has not marked willingness for your idea");
       supervisorLecturerId = chosen.id;
-    } else {
-      throw new AuthError(400, "You may only select a supervisor-posted idea or your own group's idea");
-    }
-  } else {
-    // Coordinator-Managed: a coordinator-posted idea, or the group's own
-    // APPROVED idea. The coordinator (not a supervisor) confirms.
-    const ownApproved =
-      idea.authorType === IdeaAuthorType.STUDENT &&
-      idea.groupId === group.id &&
-      idea.approvalStatus === IdeaApprovalStatus.APPROVED;
-    if (idea.authorType !== IdeaAuthorType.COORDINATOR && !ownApproved) {
-      throw new AuthError(400, "Select a coordinator-posted idea or your own approved idea");
+    } else if (policy.selectionConfirmedBy === "SUPERVISOR") {
+      throw new AuthError(400, "Selecting your own idea requires choosing a willing supervisor");
     }
   }
 
@@ -204,14 +205,21 @@ export async function respondToSelection(
     throw new AuthError(409, `Selection already ${selection.status.toLowerCase()}`);
   }
 
-  // Who confirms depends on mode: the chosen supervisor, or the coordinator.
-  if (cpi.mode === CpiMode.SUPERVISOR_LED) {
-    const lecturerId = await getAcceptedSupervisorLecturerId(userId, cpiId);
-    if (!lecturerId || lecturerId !== selection.supervisorLecturerId) {
-      throw new AuthError(403, "Only the selected supervisor can respond to this selection");
-    }
-  } else if (cpi.createdById !== userId) {
-    throw new AuthError(403, "Only the coordinator can confirm selections in Coordinator-Managed mode");
+  // Who confirms is a policy setting, so a course can require the supervisor,
+  // the coordinator, or accept either.
+  const policy = await loadPolicy(cpiId);
+  const lecturerId = await getAcceptedSupervisorLecturerId(userId, cpiId);
+  const isChosenSupervisor = Boolean(lecturerId) && lecturerId === selection.supervisorLecturerId;
+  const isCoordinator = cpi.createdById === userId;
+
+  const allowed =
+    policy.selectionConfirmedBy === "SUPERVISOR"
+      ? isChosenSupervisor
+      : policy.selectionConfirmedBy === "COORDINATOR"
+        ? isCoordinator
+        : isChosenSupervisor || isCoordinator;
+  if (!allowed) {
+    throw new AuthError(403, "You are not the confirmer for this selection");
   }
 
   return prisma.projectSelection.update({

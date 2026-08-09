@@ -28,9 +28,64 @@ enum LecturerApprovalStatus {
   REJECTED
 }
 
+// A preset label only. Creating a CPI in a mode seeds CpiPolicy defaults; after
+// that, mode gates nothing — every behavioural rule lives in CpiPolicy, so a
+// Coordinator-Managed CPI can still have supervisors who post ideas and score.
 enum CpiMode {
   SUPERVISOR_LED
   COORDINATOR_MANAGED
+}
+
+// Who confirms a group's project selection.
+enum SelectionConfirmer {
+  SUPERVISOR
+  COORDINATOR
+  EITHER
+}
+
+// Who is expected to submit scheduling availability.
+enum AvailabilityRequirement {
+  EVALUATORS_ONLY
+  EVALUATORS_AND_SUPERVISORS
+  NONE
+}
+
+// What a person DOES on an evaluation panel. Deliberately independent of who
+// they are (internal lecturer, coordinator, or external guest): an industry
+// client whose problem a group is solving can sit as SENIOR_EVALUATOR on that
+// one group's session and carry full weight.
+enum PanelRole {
+  COORDINATOR
+  SUPERVISOR
+  CO_SUPERVISOR
+  SENIOR_EVALUATOR
+  EVALUATOR
+  JUNIOR_EVALUATOR
+  HEAD_JUDGE
+}
+
+// How a panelist's scores reach the group's mark. COORDINATOR_DECIDES scores are
+// pooled: averaged into a single contribution the coordinator then weights, so a
+// crowd of walk-ins cannot outvote the formal panel by sheer number.
+enum MarkCounting {
+  COUNTED
+  ADVISORY
+  COORDINATOR_DECIDES
+}
+
+// Whether panelists on a stage may see each other's scores before review.
+// ISOLATED is the default everywhere; the open modes exist for open events such
+// as an FYP demonstration day and are an explicit, audit-logged choice.
+enum PanelScoreVisibility {
+  ISOLATED
+  OPEN_WITH_NAMES
+  OPEN_ANONYMOUS
+}
+
+// Whether a criterion is scored once for the whole group or once per student.
+enum CriterionLevel {
+  GROUP
+  INDIVIDUAL
 }
 
 // Whether students take part as groups or individually (spec 3.3 Step 1).
@@ -100,20 +155,23 @@ enum AllocationSource {
   COORDINATOR_OVERRIDE
 }
 
+// AWAITING_REVIEW means "every required panelist has scored". Who reviews is
+// resolved from policy — the Head Judge when one is enabled, otherwise the
+// coordinator — so one status covers both flows.
 enum SessionStatus {
   SCHEDULED
-  AWAITING_HEAD_JUDGE
+  AWAITING_REVIEW
   CORRECTION_REQUESTED
   FINALIZED
 }
 
-// A rubric score is locked once the Head Judge finalizes its session (spec Flow B).
+// A rubric score is locked once its session is approved at review (spec Flow B).
 enum RubricScoreStatus {
   PENDING
   FINALIZED
 }
 
-enum HeadJudgeDecision {
+enum ReviewDecision {
   APPROVED
   CORRECTION_REQUESTED
 }
@@ -145,13 +203,18 @@ model User {
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
-  student           Student?
-  lecturer          Lecturer?
-  createdCpis       CourseInstance[] @relation("CpiCreatedBy")
-  auditLogs         AuditLog[]
-  provisioningLogs  StudentProvisioningLog[]
-  postedIdeas       ProjectIdea[]
-  notifications     Notification[]
+  student              Student?
+  lecturer             Lecturer?
+  createdCpis          CourseInstance[]         @relation("CpiCreatedBy")
+  auditLogs            AuditLog[]
+  provisioningLogs     StudentProvisioningLog[]
+  postedIdeas          ProjectIdea[]
+  notifications        Notification[]
+  panelSeats           SessionPanelist[]        @relation("PanelistUser")
+  panelSeatsAdded      SessionPanelist[]        @relation("PanelistAddedBy")
+  guestsInvited        GuestPanelist[]          @relation("GuestInvitedBy")
+  sessionReviews       SessionReview[]          @relation("SessionReviewer")
+  pooledShareDecisions PooledShareDecision[]    @relation("PooledShareDecidedBy")
 
   @@map("users")
 }
@@ -168,6 +231,7 @@ model Student {
   user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   ledGroups        Group[]       @relation("GroupLeader")
   groupMemberships GroupMember[]
+  rubricScores     RubricScore[]
 
   @@map("students")
 }
@@ -187,13 +251,14 @@ model Lecturer {
   willingExpressions    InterestExpression[]
   supervisorSelections  ProjectSelection[]
   supervisorAllocations ProjectAllocation[]
+  panelSeats            SessionPanelist[]
 
   @@map("lecturers")
 }
 
 // A single run of a project-based course in a given semester/department
-// (spec 3.1). Mode is determined automatically at Step 3 of the lifecycle —
-// nullable until the coordinator adds supervisors or explicitly skips.
+// (spec 3.1). Mode is a preset chosen at creation that seeds CpiPolicy; it is a
+// label from then on, so behaviour is read from the policy, never from mode.
 model CourseInstance {
   id                    String               @id @default(uuid())
   name                  String // e.g. "Computer Engineering FYP 2026"
@@ -209,6 +274,8 @@ model CourseInstance {
   createdAt             DateTime             @default(now()) @map("created_at")
 
   createdBy           User                 @relation("CpiCreatedBy", fields: [createdById], references: [id])
+  policy              CpiPolicy?
+  guestPanelists      GuestPanelist[]
   timeline            CpiTimeline[]
   supervisors         CpiSupervisor[]
   evaluators          CpiEvaluator[]
@@ -226,9 +293,57 @@ model CourseInstance {
   @@map("course_instances")
 }
 
+// Every behavioural rule that used to be hard-coded or derived from CpiMode.
+// One row per CPI, seeded from the mode preset at creation and editable by the
+// coordinator thereafter. Explicit typed columns rather than a JSON blob so the
+// settings stay queryable, migratable and validatable.
+model CpiPolicy {
+  id               String @id @default(uuid())
+  courseInstanceId String @unique @map("course_instance_id")
+
+  // Idea posting — who may author, and under what constraints.
+  allowStudentIdeas          Boolean @default(true) @map("allow_student_ideas")
+  studentIdeasLeaderOnly     Boolean @default(true) @map("student_ideas_leader_only")
+  allowSupervisorIdeas       Boolean @default(true) @map("allow_supervisor_ideas")
+  allowCoordinatorIdeas      Boolean @default(true) @map("allow_coordinator_ideas")
+  allowLecturerIdeas         Boolean @default(false) @map("allow_lecturer_ideas")
+  requireStudentIdeaApproval Boolean @default(false) @map("require_student_idea_approval")
+  maxIdeasPerGroup           Int?    @map("max_ideas_per_group")
+  allowCoSupervisorOnIdea    Boolean @default(true) @map("allow_co_supervisor_on_idea")
+
+  // Project selection.
+  interestEnabled                   Boolean            @default(true) @map("interest_enabled")
+  maxInterestsPerGroup              Int?               @map("max_interests_per_group")
+  allowInterestWithdrawal           Boolean            @default(true) @map("allow_interest_withdrawal")
+  allowLecturerInterestInGroupIdeas Boolean            @default(true) @map("allow_lecturer_interest_in_group_ideas")
+  allowCoSupervisionInterest        Boolean            @default(true) @map("allow_co_supervision_interest")
+  studentsSeeOtherGroupIdeas        Boolean            @default(false) @map("students_see_other_group_ideas")
+  allowSupervisorSelfRequest        Boolean            @default(true) @map("allow_supervisor_self_request")
+  selectionConfirmedBy              SelectionConfirmer @default(SUPERVISOR) @map("selection_confirmed_by")
+
+  // Participation shape.
+  allowIndividualParticipation Boolean @default(false) @map("allow_individual_participation")
+  autoCreateSoloGroup          Boolean @default(true) @map("auto_create_solo_group")
+
+  // Evaluation.
+  headJudgeEnabled         Boolean                 @default(false) @map("head_judge_enabled")
+  requireOverallComment    Boolean                 @default(true) @map("require_overall_comment")
+  availabilityRequiredFrom AvailabilityRequirement @default(EVALUATORS_ONLY) @map("availability_required_from")
+
+  // Results.
+  gradingEnabled        Boolean @default(false) @map("grading_enabled")
+  caContributionPercent Float?  @map("ca_contribution_percent")
+
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+
+  @@map("cpi_policies")
+}
+
 // Which lecturers the coordinator invited as supervisors for a CPI (spec 3.3
-// Step 3 / table cpi_supervisors). The presence of ANY row flips the CPI into
-// Supervisor-Led mode; each invite must be accepted by the lecturer.
+// Step 3 / table cpi_supervisors). Each invite must be accepted by the lecturer.
+// Inviting a supervisor no longer changes the CPI's mode — see CpiPolicy.
 model CpiSupervisor {
   id               String           @id @default(uuid())
   courseInstanceId String           @map("course_instance_id")
@@ -244,8 +359,10 @@ model CpiSupervisor {
   @@map("cpi_supervisors")
 }
 
-// The CPI's evaluator pool + which one is Head Judge (spec 3.3 Step 3). Exists
-// in both modes. Exactly one isHeadJudge=true per CPI (enforced in the service).
+// The CPI's evaluator pool — a convenience shortlist, no longer a gate: any
+// approved lecturer can be seated on a session panel directly. isHeadJudge marks
+// the CPI's default reviewer (at most one, enforced in the service), which seeds
+// the HEAD_JUDGE seat on new panels when policy enables one.
 model CpiEvaluator {
   id               String   @id @default(uuid())
   courseInstanceId String   @map("course_instance_id")
@@ -257,7 +374,7 @@ model CpiEvaluator {
   lecturer         Lecturer                @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
   stageAssignments StageEvaluator[]
   availability     EvaluatorAvailability[]
-  rubricScores     RubricScore[]
+  panelSeats       SessionPanelist[]
 
   @@unique([courseInstanceId, lecturerId])
   @@map("cpi_evaluators")
@@ -420,7 +537,6 @@ model EvaluationStage {
   courseInstanceId      String    @map("course_instance_id")
   name                  String
   weight                Int // percent; stages sum to 100 per CPI
-  evaluatorsRequired    Int       @map("evaluators_required")
   submissionRequired    Boolean   @default(false) @map("submission_required")
   // Per-stage submission window; when null, submissions fall back to the CPI's
   // PROPOSAL_SUBMISSION phase window (so multi-stage submissions can differ).
@@ -432,14 +548,26 @@ model EvaluationStage {
   executionWindowStart  DateTime? @map("execution_window_start")
   executionWindowEnd    DateTime? @map("execution_window_end")
   orderIndex            Int       @map("order_index")
+  // Whether panelists on this stage see each other's scores before review.
+  // ISOLATED unless the coordinator deliberately opens it for an open event.
+  panelScoreVisibility  PanelScoreVisibility @default(ISOLATED) @map("panel_score_visibility")
+  // Pooled contribution from COORDINATOR_DECIDES panelists (walk-in lecturers,
+  // guests without a formal role): their scores are averaged into one figure
+  // weighted by pooledSharePercent. Null means they do not count at all.
+  // pooledScorerLimit caps how many of them count and is validated as uniform
+  // across every group in the stage, so panels of unequal size stay comparable.
+  pooledSharePercent    Float?    @map("pooled_share_percent")
+  pooledScorerLimit     Int?      @map("pooled_scorer_limit")
   createdAt             DateTime  @default(now()) @map("created_at")
 
-  courseInstance CourseInstance      @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
-  criteria       RubricCriterion[]
-  evaluators     StageEvaluator[]
-  submissions    Submission[]
-  sessions       EvaluationSession[]
-  finalMarks     FinalMark[]
+  courseInstance       CourseInstance        @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  criteria             RubricCriterion[]
+  evaluators           StageEvaluator[]
+  panelRules           StagePanelRule[]
+  pooledShareDecisions PooledShareDecision[]
+  submissions          Submission[]
+  sessions             EvaluationSession[]
+  finalMarks           FinalMark[]
 
   @@index([courseInstanceId])
   @@map("evaluation_stages")
@@ -454,6 +582,9 @@ model RubricCriterion {
   description       String?
   weight            Int // percent within the stage; criteria sum to 100
   maxScore          Int     @map("max_score")
+  // GROUP criteria are scored once for the whole group; INDIVIDUAL criteria are
+  // scored once per student, which is what lets members of one group differ.
+  level             CriterionLevel @default(GROUP)
   orderIndex        Int     @map("order_index")
 
   stage  EvaluationStage @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
@@ -463,8 +594,123 @@ model RubricCriterion {
   @@map("rubric_criteria")
 }
 
-// Which CPI evaluators are assigned to a given stage (spec 3.3 Step 8: "assigns
-// specific evaluators per stage"). References the CPI-level evaluator pool row.
+// The composition a stage expects, per role: how many are required, how many are
+// allowed, what their scores weigh, and whether anyone may join. This is where
+// "coordinator + supervisor + evaluator are mandatory" is expressed — three rows
+// with minRequired 1 — and equally where an open FYP demonstration is expressed:
+// zero required evaluators plus one openToAll row.
+model StagePanelRule {
+  id                String       @id @default(uuid())
+  evaluationStageId String       @map("evaluation_stage_id")
+  role              PanelRole
+  minRequired       Int          @default(0) @map("min_required")
+  maxAllowed        Int?         @map("max_allowed")
+  weightPercent     Float?       @map("weight_percent")
+  markCounting      MarkCounting @default(COUNTED) @map("mark_counting")
+  openToAll         Boolean      @default(false) @map("open_to_all")
+
+  stage EvaluationStage @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+
+  @@unique([evaluationStageId, role])
+  @@map("stage_panel_rules")
+}
+
+// One person's seat on one session's panel. Because a session is a single group
+// at a single stage, every group can have a different panel at the same event —
+// different supervisor, different evaluators, its own guests. Exactly one
+// identity column is set; internal people also carry userId so authorization
+// never has to branch on which kind they are.
+model SessionPanelist {
+  id                  String        @id @default(uuid())
+  evaluationSessionId String        @map("evaluation_session_id")
+  role                PanelRole
+  userId              String?       @map("user_id")
+  lecturerId          String?       @map("lecturer_id")
+  cpiEvaluatorId      String?       @map("cpi_evaluator_id")
+  guestPanelistId     String?       @map("guest_panelist_id")
+  // Overrides for this one seat; null falls back to the stage's rule for the role.
+  weightPercent       Float?        @map("weight_percent")
+  markCounting        MarkCounting? @map("mark_counting")
+  addedById           String?       @map("added_by_id")
+  joinedAt            DateTime      @default(now()) @map("joined_at")
+
+  session      EvaluationSession  @relation(fields: [evaluationSessionId], references: [id], onDelete: Cascade)
+  user         User?              @relation("PanelistUser", fields: [userId], references: [id], onDelete: Cascade)
+  lecturer     Lecturer?          @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  cpiEvaluator CpiEvaluator?      @relation(fields: [cpiEvaluatorId], references: [id], onDelete: Cascade)
+  guest        GuestPanelist?     @relation(fields: [guestPanelistId], references: [id], onDelete: Cascade)
+  addedBy      User?              @relation("PanelistAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+  scores       RubricScore[]
+  evaluation   SessionEvaluation?
+
+  // One seat per person per session — a person cannot hold two roles at once,
+  // which is also what stops their marks being counted twice.
+  @@unique([evaluationSessionId, userId])
+  @@unique([evaluationSessionId, guestPanelistId])
+  @@index([evaluationSessionId])
+  @@map("session_panelists")
+}
+
+// An external participant (industry professional, visiting academic) invited to
+// score specific sessions. No account and no password: they authenticate with a
+// one-time link whose SHA-256 hash is stored here. Scoped to the sessions they
+// hold a seat on, so a client tied to one group never sees another's.
+model GuestPanelist {
+  id               String    @id @default(uuid())
+  courseInstanceId String    @map("course_instance_id")
+  fullName         String    @map("full_name")
+  email            String
+  organization     String?
+  tokenHash        String    @unique @map("token_hash")
+  tokenExpiresAt   DateTime  @map("token_expires_at")
+  revokedAt        DateTime? @map("revoked_at")
+  invitedById      String    @map("invited_by_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  courseInstance CourseInstance    @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  invitedBy      User              @relation("GuestInvitedBy", fields: [invitedById], references: [id])
+  panelSeats     SessionPanelist[]
+
+  @@index([courseInstanceId])
+  @@map("guest_panelists")
+}
+
+// The mandatory overall comment a panelist writes about a session, separate from
+// the optional per-criterion comments. Required unless CpiPolicy says otherwise.
+model SessionEvaluation {
+  id                String   @id @default(uuid())
+  sessionPanelistId String   @unique @map("session_panelist_id")
+  overallComment    String   @map("overall_comment")
+  submittedAt       DateTime @default(now()) @map("submitted_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  panelist SessionPanelist @relation(fields: [sessionPanelistId], references: [id], onDelete: Cascade)
+
+  @@map("session_evaluations")
+}
+
+// The coordinator's decision on how much a stage's pooled (COORDINATOR_DECIDES)
+// scores count. Taken with the scores already visible, so the reason is required
+// and the whole decision is kept as an audit record.
+model PooledShareDecision {
+  id                String   @id @default(uuid())
+  evaluationStageId String   @map("evaluation_stage_id")
+  sharePercent      Float    @map("share_percent")
+  scorerLimit       Int?     @map("scorer_limit")
+  reason            String
+  decidedById       String   @map("decided_by_id")
+  decidedAt         DateTime @default(now()) @map("decided_at")
+
+  stage     EvaluationStage @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+  decidedBy User            @relation("PooledShareDecidedBy", fields: [decidedById], references: [id])
+
+  @@index([evaluationStageId])
+  @@map("pooled_share_decisions")
+}
+
+// Default evaluators for a stage. These seed each new session's panel; the panel
+// itself is then editable per session, so swapping an unavailable evaluator is a
+// one-row change and does not disturb any other group.
 model StageEvaluator {
   id                String @id @default(uuid())
   evaluationStageId String @map("evaluation_stage_id")
@@ -540,56 +786,66 @@ model EvaluationSession {
   status            SessionStatus @default(SCHEDULED)
   createdAt         DateTime      @default(now()) @map("created_at")
 
-  courseInstance CourseInstance   @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
-  group          Group            @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  stage          EvaluationStage  @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+  courseInstance CourseInstance    @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  group          Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  stage          EvaluationStage   @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+  panelists      SessionPanelist[]
   scores         RubricScore[]
-  review         HeadJudgeReview?
+  review         SessionReview?
 
   @@unique([groupId, evaluationStageId])
   @@index([courseInstanceId])
   @@map("evaluation_sessions")
 }
 
-// One evaluator's score for one criterion in a session (spec table rubric_scores).
-// Isolation (evaluators can't see each other's scores before HJ review) is
-// enforced in the service read path, not here. Locked once status=FINALIZED.
+// One panelist's score for one criterion in a session (spec table rubric_scores).
+// studentId is null for a GROUP criterion and set for an INDIVIDUAL one. Score
+// visibility is enforced in the service read path against the stage's
+// panelScoreVisibility, not here. Locked once status=FINALIZED.
+//
+// Uniqueness is enforced by two partial indexes created in the migration rather
+// than an @@unique here: Postgres treats NULLs as distinct, so a plain compound
+// unique would let the same panelist score one group criterion twice.
 model RubricScore {
   id                  String            @id @default(uuid())
   evaluationSessionId String            @map("evaluation_session_id")
-  cpiEvaluatorId      String            @map("cpi_evaluator_id")
+  sessionPanelistId   String            @map("session_panelist_id")
   rubricCriterionId   String            @map("rubric_criterion_id")
+  studentId           String?           @map("student_id")
   score               Int
   comment             String?
   status              RubricScoreStatus @default(PENDING)
   createdAt           DateTime          @default(now()) @map("created_at")
   updatedAt           DateTime          @updatedAt @map("updated_at")
 
-  session      EvaluationSession @relation(fields: [evaluationSessionId], references: [id], onDelete: Cascade)
-  cpiEvaluator CpiEvaluator      @relation(fields: [cpiEvaluatorId], references: [id], onDelete: Cascade)
-  criterion    RubricCriterion   @relation(fields: [rubricCriterionId], references: [id], onDelete: Cascade)
+  session   EvaluationSession @relation(fields: [evaluationSessionId], references: [id], onDelete: Cascade)
+  panelist  SessionPanelist   @relation(fields: [sessionPanelistId], references: [id], onDelete: Cascade)
+  criterion RubricCriterion   @relation(fields: [rubricCriterionId], references: [id], onDelete: Cascade)
+  student   Student?          @relation(fields: [studentId], references: [id], onDelete: Cascade)
 
-  @@unique([evaluationSessionId, cpiEvaluatorId, rubricCriterionId])
   @@index([evaluationSessionId])
+  @@index([sessionPanelistId])
   @@map("rubric_scores")
 }
 
-// The Head Judge's decision on a session (spec table head_judge_reviews). One
-// row per session, updated on each decision; correctionEvaluatorId names the
-// evaluator asked to resubmit.
-model HeadJudgeReview {
-  id                      String            @id @default(uuid())
-  evaluationSessionId     String            @unique @map("evaluation_session_id")
-  headJudgeCpiEvaluatorId String            @map("head_judge_cpi_evaluator_id")
-  decision                HeadJudgeDecision
-  reason                  String?
-  correctionEvaluatorId   String?           @map("correction_evaluator_id")
-  createdAt               DateTime          @default(now()) @map("created_at")
-  updatedAt               DateTime          @updatedAt @map("updated_at")
+// The reviewer's decision on a session. Who reviews is resolved from policy —
+// the Head Judge when one is enabled, otherwise the coordinator — so this stores
+// the deciding user rather than a Head Judge reference. correctionPanelistId
+// names the panelist asked to resubmit.
+model SessionReview {
+  id                   String         @id @default(uuid())
+  evaluationSessionId  String         @unique @map("evaluation_session_id")
+  reviewerUserId       String         @map("reviewer_user_id")
+  decision             ReviewDecision
+  reason               String?
+  correctionPanelistId String?        @map("correction_panelist_id")
+  createdAt            DateTime       @default(now()) @map("created_at")
+  updatedAt            DateTime       @updatedAt @map("updated_at")
 
-  session EvaluationSession @relation(fields: [evaluationSessionId], references: [id], onDelete: Cascade)
+  session  EvaluationSession @relation(fields: [evaluationSessionId], references: [id], onDelete: Cascade)
+  reviewer User              @relation("SessionReviewer", fields: [reviewerUserId], references: [id])
 
-  @@map("head_judge_reviews")
+  @@map("session_reviews")
 }
 
 // Phase start/end dates per CPI — one row per phase (spec 7.1).

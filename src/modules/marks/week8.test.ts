@@ -85,11 +85,13 @@ async function setupApprovedSession() {
   const groupId = g.body.id as string;
 
   await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
-  await request(app).post(`/courses/${cpiId}/finalize-coordinator-managed`).set(as("coord")).expect(200);
+  await request(app).post(`/courses/${cpiId}/coordinator-managed-preset`).set(as("coord")).expect(200);
   for (const ev of ["ev1", "ev2", "hj"]) {
     await request(app).post(`/courses/${cpiId}/evaluators`).set(as("coord")).send({ lecturerUserId: userIds[ev] }).expect(201);
   }
   await request(app).post(`/courses/${cpiId}/head-judge`).set(as("coord")).send({ lecturerUserId: userIds.hj }).expect(200);
+  // A Head Judge is opt-in now; without this the coordinator would be the reviewer.
+  await request(app).patch(`/courses/${cpiId}/policy`).set(as("coord")).send({ headJudgeEnabled: true }).expect(200);
 
   await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
   const idea = await request(app).post(`/courses/${cpiId}/ideas`).set(as("coord")).send({ title: "IDEA", description: "d" });
@@ -107,7 +109,7 @@ async function setupApprovedSession() {
         {
           name: "Final Demo",
           weight: 100,
-          evaluatorsRequired: 2,
+          panelRules: [{ role: "EVALUATOR", minRequired: 2 }],
           submissionRequired: false,
           criteria: [
             { name: "C1", weight: 50, maxScore: 10 },
@@ -127,8 +129,9 @@ async function setupApprovedSession() {
   const sessionId = (gen.body.sessions as { id: string; group: { id: string } }[]).find((s) => s.group.id === groupId)!.id;
 
   await openPhase(cpiId, CpiPhase.EVALUATION_EXECUTION);
-  await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1.id, score: 7 }, { criterionId: c2.id, score: 7 }] }).expect(201);
-  await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1.id, score: 9 }, { criterionId: c2.id, score: 9 }] }).expect(201);
+  await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1.id, score: 7 }, { criterionId: c2.id, score: 7 }] , overallComment: 'Reviewed.' }).expect(201);
+  await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1.id, score: 9 }, { criterionId: c2.id, score: 9 }] , overallComment: 'Reviewed.' }).expect(201);
+  await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/close-scoring`).set(as("hj")).expect(200);
   await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/approve`).set(as("hj")).expect(200);
 
   return { cpiId, groupId, sessionId };
@@ -195,7 +198,7 @@ describe("Week 8: mark aggregation, publishing, student view", () => {
     await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);
     const g = await request(app).post(`/courses/${cpiId}/groups`).set(as("s1")).send({ name: "Group A" });
     await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
-    await request(app).post(`/courses/${cpiId}/finalize-coordinator-managed`).set(as("coord")).expect(200);
+    await request(app).post(`/courses/${cpiId}/coordinator-managed-preset`).set(as("coord")).expect(200);
     for (const ev of ["ev1", "ev2"]) await request(app).post(`/courses/${cpiId}/evaluators`).set(as("coord")).send({ lecturerUserId: userIds[ev] }).expect(201);
     await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
     const idea = await request(app).post(`/courses/${cpiId}/ideas`).set(as("coord")).send({ title: "I", description: "d" });
@@ -203,7 +206,7 @@ describe("Week 8: mark aggregation, publishing, student view", () => {
     await request(app).put(`/courses/${cpiId}/allocations/${g.body.id}`).set(as("coord")).send({ ideaId: idea.body.id }).expect(200);
     await openPhase(cpiId, CpiPhase.EVALUATION_CONFIG);
     await request(app).put(`/courses/${cpiId}/evaluations/config`).set(as("coord")).send({
-      stages: [{ name: "S", weight: 100, evaluatorsRequired: 2, submissionRequired: false, criteria: [{ name: "C", weight: 100, maxScore: 10 }] }],
+      stages: [{ name: "S", weight: 100, panelRules: [{ role: "EVALUATOR", minRequired: 2 }], submissionRequired: false, criteria: [{ name: "C", weight: 100, maxScore: 10 }] }],
     }).expect(200);
     await openPhase(cpiId, CpiPhase.AVAILABILITY_SUBMISSION);
     await request(app).post(`/courses/${cpiId}/sessions/generate`).set(as("coord")).expect(201);

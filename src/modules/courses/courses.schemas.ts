@@ -1,4 +1,4 @@
-import { CpiParticipationMode, CpiPhase } from "@prisma/client";
+import { CpiMode, CpiParticipationMode, CpiPhase } from "@prisma/client";
 import { z } from "zod";
 
 export const createCpiSchema = z.object({
@@ -7,6 +7,9 @@ export const createCpiSchema = z.object({
   participationMode: z.nativeEnum(CpiParticipationMode),
   department: z.string().trim().min(1),
   academicYear: z.string().trim().min(1),
+  // Optional preset that seeds the policy. Omitting it starts from defaults;
+  // it does not gate anything afterwards.
+  mode: z.nativeEnum(CpiMode).optional(),
 });
 
 const timelinePhaseSchema = z.object({

@@ -120,8 +120,8 @@ describe("Week 3 acceptance: CPI lifecycle setup", () => {
     expect(detail.body.mode).toBeNull();
   });
 
-  it("flips to SUPERVISOR_LED when a supervisor is invited, and the lecturer can accept", async () => {
-    const cpiId = await createCpi("Supervisor-Led CPI");
+  it("invites a supervisor without changing the CPI's mode, and the lecturer can accept", async () => {
+    const cpiId = await createCpi("Supervisor CPI");
     await setTimeline(cpiId, true);
 
     const invite = await request(app)
@@ -131,8 +131,10 @@ describe("Week 3 acceptance: CPI lifecycle setup", () => {
     expect(invite.status).toBe(201);
     expect(invite.body.invitationStatus).toBe("PENDING");
 
+    // Inviting a supervisor no longer decides how the course behaves — that is
+    // the policy's job, so mode is untouched.
     const detail = await request(app).get(`/courses/${cpiId}`).set("Authorization", `Bearer ${coordToken}`);
-    expect(detail.body.mode).toBe("SUPERVISOR_LED");
+    expect(detail.body.mode).toBeNull();
 
     const respond = await request(app)
       .post(`/courses/${cpiId}/supervisors/respond`)
@@ -179,21 +181,27 @@ describe("Week 3 acceptance: CPI lifecycle setup", () => {
     expect(invite.body.code).toBe("PHASE_NOT_OPEN");
   });
 
-  it("finalizes as COORDINATOR_MANAGED and then blocks supervisor invites", async () => {
+  it("applies the Coordinator-Managed preset and still allows supervisors", async () => {
     const cpiId = await createCpi("Coordinator-Managed CPI");
     await setTimeline(cpiId, true);
 
-    const finalize = await request(app)
-      .post(`/courses/${cpiId}/finalize-coordinator-managed`)
+    const preset = await request(app)
+      .post(`/courses/${cpiId}/coordinator-managed-preset`)
       .set("Authorization", `Bearer ${coordToken}`);
-    expect(finalize.status).toBe(200);
-    expect(finalize.body.mode).toBe("COORDINATOR_MANAGED");
+    expect(preset.status).toBe(200);
+    expect(preset.body.mode).toBe("COORDINATOR_MANAGED");
 
+    const policy = await request(app).get(`/courses/${cpiId}/policy`).set("Authorization", `Bearer ${coordToken}`);
+    expect(policy.body.allowCoordinatorIdeas).toBe(true);
+    expect(policy.body.selectionConfirmedBy).toBe("COORDINATOR");
+
+    // A coordinator-run course may still have supervisors — they simply do not
+    // post ideas or confirm selections unless the policy says so.
     const invite = await request(app)
       .post(`/courses/${cpiId}/supervisors`)
       .set("Authorization", `Bearer ${coordToken}`)
       .send({ lecturerUserId: lect1UserId });
-    expect(invite.status).toBe(409);
+    expect(invite.status).toBe(201);
   });
 
   it("enforces RBAC and CPI-scope: non-coordinators are blocked", async () => {

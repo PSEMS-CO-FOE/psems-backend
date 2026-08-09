@@ -85,11 +85,13 @@ async function setupSession() {
   const groupId = g.body.id as string;
 
   await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
-  await request(app).post(`/courses/${cpiId}/finalize-coordinator-managed`).set(as("coord")).expect(200);
+  await request(app).post(`/courses/${cpiId}/coordinator-managed-preset`).set(as("coord")).expect(200);
   for (const ev of ["ev1", "ev2", "hj"]) {
     await request(app).post(`/courses/${cpiId}/evaluators`).set(as("coord")).send({ lecturerUserId: userIds[ev] }).expect(201);
   }
   await request(app).post(`/courses/${cpiId}/head-judge`).set(as("coord")).send({ lecturerUserId: userIds.hj }).expect(200);
+  // A Head Judge is opt-in now; without this the coordinator would be the reviewer.
+  await request(app).patch(`/courses/${cpiId}/policy`).set(as("coord")).send({ headJudgeEnabled: true }).expect(200);
 
   await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
   const idea = await request(app).post(`/courses/${cpiId}/ideas`).set(as("coord")).send({ title: "COORD-IDEA", description: "d" });
@@ -106,7 +108,7 @@ async function setupSession() {
         {
           name: "Final Demo",
           weight: 100,
-          evaluatorsRequired: 2,
+          panelRules: [{ role: "EVALUATOR", minRequired: 2 }],
           submissionRequired: false,
           criteria: [
             { name: "C1", weight: 50, maxScore: 10 },
@@ -160,7 +162,7 @@ describe("Week 7: evaluator score isolation (non-negotiable)", () => {
     await request(app)
       .post(`/courses/${cpiId}/sessions/${sessionId}/scores`)
       .set(as("ev1"))
-      .send({ scores: [{ criterionId: c1Id, score: 8 }, { criterionId: c2Id, score: 9 }] })
+      .send({ scores: [{ criterionId: c1Id, score: 8 }, { criterionId: c2Id, score: 9 }] , overallComment: 'Reviewed.' })
       .expect(201);
 
     // ev2 (not yet scored) cannot see ev1's scores — sees only their own (none).
@@ -179,7 +181,7 @@ describe("Week 7: evaluator score isolation (non-negotiable)", () => {
     await request(app)
       .post(`/courses/${cpiId}/sessions/${sessionId}/scores`)
       .set(as("ev2"))
-      .send({ scores: [{ criterionId: c1Id, score: 8 }, { criterionId: c2Id, score: 3 }] })
+      .send({ scores: [{ criterionId: c1Id, score: 8 }, { criterionId: c2Id, score: 3 }] , overallComment: 'Reviewed.' })
       .expect(201);
 
     const ev1AfterBoth = await request(app).get(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1"));
@@ -188,8 +190,8 @@ describe("Week 7: evaluator score isolation (non-negotiable)", () => {
 
   it("the Head Judge sees both evaluators side-by-side with deviation flags; others cannot", async () => {
     const { cpiId, sessionId, c1Id, c2Id } = await setupSession();
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1Id, score: 8 }, { criterionId: c2Id, score: 9 }] }).expect(201);
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1Id, score: 8 }, { criterionId: c2Id, score: 3 }] }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1Id, score: 8 }, { criterionId: c2Id, score: 9 }] , overallComment: 'Reviewed.' }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1Id, score: 8 }, { criterionId: c2Id, score: 3 }] , overallComment: 'Reviewed.' }).expect(201);
 
     // Non-HJ evaluator cannot open the review.
     await request(app).get(`/courses/${cpiId}/sessions/${sessionId}/review`).set(as("ev1")).expect(403);
@@ -207,15 +209,17 @@ describe("Week 7: evaluator score isolation (non-negotiable)", () => {
 describe("Week 7: Head Judge approve + correction", () => {
   it("approves once both submit, locking scores as FINALIZED", async () => {
     const { cpiId, sessionId, c1Id, c2Id } = await setupSession();
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1Id, score: 7 }, { criterionId: c2Id, score: 7 }] }).expect(201);
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1Id, score: 8 }, { criterionId: c2Id, score: 8 }] }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1Id, score: 7 }, { criterionId: c2Id, score: 7 }] , overallComment: 'Reviewed.' }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1Id, score: 8 }, { criterionId: c2Id, score: 8 }] , overallComment: 'Reviewed.' }).expect(201);
 
+    // Marking never ends by itself — the Head Judge closes it, then approves.
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/close-scoring`).set(as("hj")).expect(200);
     const approve = await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/approve`).set(as("hj"));
     expect(approve.status).toBe(200);
     expect(approve.body.decision).toBe("APPROVED");
 
     // Locked: further scoring rejected.
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1Id, score: 5 }] }).expect(409);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1Id, score: 5 }] , overallComment: 'Reviewed.' }).expect(409);
 
     // Now the coordinator can see all finalized scores.
     const coordView = await request(app).get(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("coord"));
@@ -223,30 +227,35 @@ describe("Week 7: Head Judge approve + correction", () => {
     expect(coordView.body).toHaveLength(4);
   });
 
-  it("rejects approval before all evaluators submit, and supports request-correction", async () => {
+  it("requires scoring to be closed before approval, and supports request-correction", async () => {
     const { cpiId, sessionId, c1Id, c2Id } = await setupSession();
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1Id, score: 6 }, { criterionId: c2Id, score: 6 }] }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1Id, score: 6 }, { criterionId: c2Id, score: 6 }] , overallComment: 'Reviewed.' }).expect(201);
 
-    // Only ev1 submitted -> cannot approve yet.
+    // Scoring is still open, so approving is refused — it has to be closed first.
     await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/approve`).set(as("hj")).expect(409);
 
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1Id, score: 2 }, { criterionId: c2Id, score: 2 }] }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1Id, score: 2 }, { criterionId: c2Id, score: 2 }] , overallComment: 'Reviewed.' }).expect(201);
 
-    // HJ asks ev2 to reconsider.
+    // HJ asks ev2 to reconsider. Corrections now target a panel seat, so the
+    // same person can be asked in whatever capacity they sat.
+    const ev2Seat = await prisma.sessionPanelist.findFirst({
+      where: { evaluationSessionId: sessionId, userId: userIds.ev2 },
+    });
     const correction = await request(app)
       .post(`/courses/${cpiId}/sessions/${sessionId}/request-correction`)
       .set(as("hj"))
-      .send({ evaluatorUserId: userIds.ev2, reason: "Scores far below the other evaluator" });
+      .send({ panelistId: ev2Seat!.id, reason: "Scores far below the other evaluator" });
     expect(correction.status).toBe(200);
     expect(correction.body.decision).toBe("CORRECTION_REQUESTED");
 
     // ev2 resubmits, then HJ approves.
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1Id, score: 6 }, { criterionId: c2Id, score: 6 }] }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1Id, score: 6 }, { criterionId: c2Id, score: 6 }] , overallComment: 'Reviewed.' }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/close-scoring`).set(as("hj")).expect(200);
     await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/approve`).set(as("hj")).expect(200);
   });
 
   it("a non-assigned lecturer (the Head Judge) cannot submit scores", async () => {
     const { cpiId, sessionId, c1Id } = await setupSession();
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("hj")).send({ scores: [{ criterionId: c1Id, score: 5 }] }).expect(403);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("hj")).send({ scores: [{ criterionId: c1Id, score: 5 }] , overallComment: 'Reviewed.' }).expect(403);
   });
 });

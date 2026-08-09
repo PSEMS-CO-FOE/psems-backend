@@ -2,7 +2,8 @@ import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
 import { notifyMany } from "../notifications/notifications.service";
-import { getCpiEvaluatorId, getHeadJudgeCpiEvaluatorId } from "../shared/cpiMembership";
+import { seedPanel } from "../panel/panel.service";
+import { getCpiEvaluatorId, getSessionPanelist } from "../shared/cpiMembership";
 
 export async function submitAvailability(userId: string, cpiId: string, slotStart: Date, slotEnd: Date) {
   const cpiEvaluatorId = await getCpiEvaluatorId(userId, cpiId);
@@ -41,9 +42,12 @@ export async function generateSessions(coordinatorUserId: string, cpiId: string)
         where: { groupId_evaluationStageId: { groupId, evaluationStageId: stage.id } },
       });
       if (exists) continue;
-      await prisma.evaluationSession.create({
+      const session = await prisma.evaluationSession.create({
         data: { courseInstanceId: cpiId, groupId, evaluationStageId: stage.id },
       });
+      // Seed the panel from the stage's defaults. It stays editable per session
+      // afterwards, which is how one group can differ from another.
+      await seedPanel(session.id);
       created++;
     }
   }
@@ -126,44 +130,54 @@ export async function scheduleSession(
   return { session: updated, conflicts };
 }
 
-// Sessions visible to the requester: coordinator/HJ see all; an evaluator sees
-// only sessions whose stage they're assigned to.
+// Sessions visible to the requester: the coordinator sees all; everyone else
+// sees the sessions they hold a panel seat on, plus (for a pool evaluator) any
+// session of a stage they are a default evaluator for.
 export async function listSessions(userId: string, cpiId: string) {
   const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
   if (!cpi) throw new AuthError(404, "CPI not found");
 
-  if (cpi.createdById === userId || (await getHeadJudgeCpiEvaluatorId(userId, cpiId))) {
+  if (cpi.createdById === userId) {
     return getSessionMap(cpiId);
   }
 
-  const cpiEvaluatorId = await getCpiEvaluatorId(userId, cpiId);
-  if (!cpiEvaluatorId) throw new AuthError(403, "You are not a participant in this CPI's evaluation");
+  const seatedSessionIds = (
+    await prisma.sessionPanelist.findMany({
+      where: { userId, session: { courseInstanceId: cpiId } },
+      select: { evaluationSessionId: true },
+    })
+  ).map((p) => p.evaluationSessionId);
 
-  const stageIds = (
-    await prisma.stageEvaluator.findMany({ where: { cpiEvaluatorId }, select: { evaluationStageId: true } })
-  ).map((s) => s.evaluationStageId);
+  const cpiEvaluatorId = await getCpiEvaluatorId(userId, cpiId);
+  const stageIds = cpiEvaluatorId
+    ? (
+        await prisma.stageEvaluator.findMany({ where: { cpiEvaluatorId }, select: { evaluationStageId: true } })
+      ).map((s) => s.evaluationStageId)
+    : [];
+
+  if (seatedSessionIds.length === 0 && stageIds.length === 0) {
+    throw new AuthError(403, "You are not a participant in this CPI's evaluation");
+  }
 
   const sessions = await prisma.evaluationSession.findMany({
-    where: { courseInstanceId: cpiId, evaluationStageId: { in: stageIds } },
+    where: {
+      courseInstanceId: cpiId,
+      OR: [{ id: { in: seatedSessionIds } }, { evaluationStageId: { in: stageIds } }],
+    },
     include: sessionInclude,
     orderBy: { createdAt: "asc" },
   });
   return sessions.map(withDerived);
 }
 
-// Whoever runs the room (coordinator, an assigned evaluator, or the Head Judge)
-// may set/control the presentation timer.
-async function assertCanRunTimer(userId: string, cpiId: string, evaluationStageId: string) {
+// Whoever runs the room may control the presentation timer: the coordinator, or
+// anyone holding a seat on that session's panel.
+async function assertCanRunTimer(userId: string, cpiId: string, sessionId: string) {
   const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId }, select: { createdById: true } });
-  const cpiEvaluatorId = await getCpiEvaluatorId(userId, cpiId);
-  const assigned = cpiEvaluatorId
-    ? await prisma.stageEvaluator.findUnique({
-        where: { evaluationStageId_cpiEvaluatorId: { evaluationStageId, cpiEvaluatorId } },
-      })
-    : null;
-  const isHeadJudge = (await getHeadJudgeCpiEvaluatorId(userId, cpiId)) !== null;
-  if (cpi!.createdById !== userId && !assigned && !isHeadJudge) {
-    throw new AuthError(403, "Only the coordinator, an assigned evaluator, or the Head Judge can control the timer");
+  if (cpi?.createdById === userId) return;
+  const seat = await getSessionPanelist(userId, sessionId);
+  if (!seat) {
+    throw new AuthError(403, "Only the coordinator or a member of this session's panel can control the timer");
   }
 }
 
@@ -177,7 +191,7 @@ function liveElapsed(s: { timerAccumulatedSeconds: number; timerRunning: boolean
 export async function setPresentationDuration(userId: string, cpiId: string, sessionId: string, seconds: number) {
   const session = await prisma.evaluationSession.findUnique({ where: { id: sessionId } });
   if (!session || session.courseInstanceId !== cpiId) throw new AuthError(404, "Session not found in this CPI");
-  await assertCanRunTimer(userId, cpiId, session.evaluationStageId);
+  await assertCanRunTimer(userId, cpiId, session.id);
   return prisma.evaluationSession.update({ where: { id: sessionId }, data: { presentationDurationSeconds: seconds } });
 }
 
@@ -191,7 +205,7 @@ export async function controlTimer(
 ) {
   const session = await prisma.evaluationSession.findUnique({ where: { id: sessionId } });
   if (!session || session.courseInstanceId !== cpiId) throw new AuthError(404, "Session not found in this CPI");
-  await assertCanRunTimer(userId, cpiId, session.evaluationStageId);
+  await assertCanRunTimer(userId, cpiId, session.id);
 
   const elapsed = liveElapsed(session);
   let data;

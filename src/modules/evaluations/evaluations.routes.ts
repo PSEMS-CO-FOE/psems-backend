@@ -4,17 +4,20 @@ import { requireAuth } from "../../middleware/auth";
 import { blockIfPasswordChangeRequired } from "../../middleware/forcePasswordChange";
 import { requirePhase } from "../../middleware/phase";
 import { requireRole } from "../../middleware/role";
-import { assignStageEvaluatorSchema, evaluationConfigSchema } from "./evaluations.schemas";
+import {
+  assignStageEvaluatorSchema,
+  evaluationConfigSchema,
+  patchStageSchema,
+  pooledShareSchema,
+  setPanelRulesSchema,
+} from "./evaluations.schemas";
 import * as evaluations from "./evaluations.service";
 
 export const evaluationsRouter = Router({ mergeParams: true });
 
 const authed = [requireAuth, blockIfPasswordChangeRequired];
-const coordinatorInConfig = [
-  ...authed,
-  requireRole(Role.COURSE_COORDINATOR),
-  requirePhase(CpiPhase.EVALUATION_CONFIG),
-];
+const coordinatorOnly = [...authed, requireRole(Role.COURSE_COORDINATOR)];
+const coordinatorInConfig = [...coordinatorOnly, requirePhase(CpiPhase.EVALUATION_CONFIG)];
 
 evaluationsRouter.put("/config", ...coordinatorInConfig, async (req, res, next) => {
   try {
@@ -31,6 +34,44 @@ evaluationsRouter.post("/stages/:stageId/evaluators", ...coordinatorInConfig, as
     return res
       .status(201)
       .json(await evaluations.assignStageEvaluator(req.user!.user_id, req.params.cpiId, req.params.stageId, lecturerUserId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// The patch endpoints below are deliberately NOT gated to EVALUATION_CONFIG.
+// Restaffing a panel, fixing a window, opening a stage or weighting the pooled
+// marks are all things that happen on the day, long after that phase closed.
+evaluationsRouter.patch("/stages/:stageId", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const input = patchStageSchema.parse(req.body);
+    return res.json(await evaluations.patchStage(req.user!.user_id, req.params.cpiId, req.params.stageId, input));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+evaluationsRouter.put("/stages/:stageId/panel-rules", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const input = setPanelRulesSchema.parse(req.body);
+    return res.json(await evaluations.setPanelRules(req.user!.user_id, req.params.cpiId, req.params.stageId, input));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+evaluationsRouter.post("/stages/:stageId/pooled-share", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const input = pooledShareSchema.parse(req.body);
+    return res.json(await evaluations.setPooledShare(req.user!.user_id, req.params.cpiId, req.params.stageId, input));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+evaluationsRouter.get("/stages/:stageId/pooled-share", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    return res.json(await evaluations.listPooledShareDecisions(req.user!.user_id, req.params.cpiId, req.params.stageId));
   } catch (err) {
     return next(err);
   }

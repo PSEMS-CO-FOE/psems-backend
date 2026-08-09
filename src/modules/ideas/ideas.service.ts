@@ -1,56 +1,73 @@
-import { CpiMode, IdeaApprovalStatus, IdeaAuthorType, IdeaVisibility } from "@prisma/client";
+import { IdeaApprovalStatus, IdeaAuthorType, IdeaVisibility } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
 import { notifyMany } from "../notifications/notifications.service";
-import { getAcceptedSupervisorLecturerId, getStudentGroupId } from "../shared/cpiMembership";
+import {
+  getAcceptedSupervisorLecturerId,
+  getLeaderGroupId,
+  getStudentGroupId,
+  loadPolicy,
+} from "../shared/cpiMembership";
 
 // Post an idea (spec 3.3 Step 5). Single endpoint that branches on the actor's
-// capacity for this CPI:
-//   coordinator-owner (Coordinator-Managed) -> public coordinator idea
-//   accepted supervisor (Supervisor-Led)    -> public supervisor idea
-//   student in an accepted group            -> group-restricted student idea
+// capacity, with each branch enabled by policy rather than by CpiMode — so a
+// coordinator-run course can still let supervisors post, and vice versa.
 export async function postIdea(userId: string, cpiId: string, title: string, description: string) {
   const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
   if (!cpi) {
     throw new AuthError(404, "CPI not found");
   }
+  const policy = await loadPolicy(cpiId);
 
   const base = { courseInstanceId: cpiId, authorUserId: userId, title, description };
 
-  // 1. Coordinator posts directly — only in Coordinator-Managed mode.
   if (cpi.createdById === userId) {
-    if (cpi.mode !== CpiMode.COORDINATOR_MANAGED) {
-      throw new AuthError(403, "In Supervisor-Led mode, supervisors post ideas — not the coordinator");
+    if (!policy.allowCoordinatorIdeas) {
+      throw new AuthError(403, "This course does not accept coordinator-posted ideas");
     }
     return prisma.projectIdea.create({
       data: { ...base, authorType: IdeaAuthorType.COORDINATOR, visibility: IdeaVisibility.PUBLIC_TO_STUDENTS },
     });
   }
 
-  // 2. Supervisor posts — only in Supervisor-Led mode.
   if (await getAcceptedSupervisorLecturerId(userId, cpiId)) {
-    if (cpi.mode !== CpiMode.SUPERVISOR_LED) {
-      throw new AuthError(403, "Supervisor ideas are only posted in Supervisor-Led mode");
+    if (!policy.allowSupervisorIdeas) {
+      throw new AuthError(403, "This course does not accept supervisor-posted ideas");
     }
     return prisma.projectIdea.create({
       data: { ...base, authorType: IdeaAuthorType.SUPERVISOR, visibility: IdeaVisibility.PUBLIC_TO_STUDENTS },
     });
   }
 
-  // 3. Student posts on behalf of their group — both modes. In Coordinator-
-  // Managed the coordinator must then approve it (starts PENDING).
-  const groupId = await getStudentGroupId(userId, cpiId);
+  // A group's idea is posted by its leader, so one member cannot commit the
+  // group. When the policy drops that requirement, any accepted member may post.
+  const groupId = policy.studentIdeasLeaderOnly
+    ? await getLeaderGroupId(userId, cpiId)
+    : await getStudentGroupId(userId, cpiId);
   if (groupId) {
+    if (!policy.allowStudentIdeas) {
+      throw new AuthError(403, "This course does not accept student-posted ideas");
+    }
+    if (policy.maxIdeasPerGroup !== null) {
+      const posted = await prisma.projectIdea.count({ where: { groupId } });
+      if (posted >= policy.maxIdeasPerGroup) {
+        throw new AuthError(409, `Your group may post at most ${policy.maxIdeasPerGroup} idea(s)`);
+      }
+    }
     return prisma.projectIdea.create({
       data: {
         ...base,
         authorType: IdeaAuthorType.STUDENT,
         visibility: IdeaVisibility.GROUP_RESTRICTED,
         groupId,
-        approvalStatus: cpi.mode === CpiMode.COORDINATOR_MANAGED ? IdeaApprovalStatus.PENDING : null,
+        approvalStatus: policy.requireStudentIdeaApproval ? IdeaApprovalStatus.PENDING : null,
       },
     });
+  }
+
+  if (policy.studentIdeasLeaderOnly && (await getStudentGroupId(userId, cpiId))) {
+    throw new AuthError(403, "Only the group leader can post your group's idea");
   }
 
   throw new AuthError(403, "You are not eligible to post ideas in this CPI");
@@ -74,11 +91,15 @@ export async function listIdeas(userId: string, cpiId: string) {
     if (!groupId) {
       throw new AuthError(403, "You are not a participant in this CPI");
     }
-    // A student sees public ideas plus only their OWN group's ideas.
-    where = {
-      courseInstanceId: cpiId,
-      OR: [{ visibility: IdeaVisibility.PUBLIC_TO_STUDENTS }, { groupId }],
-    };
+    // A student sees public ideas plus only their OWN group's — unless the
+    // course deliberately opens every group's ideas to everyone.
+    const policy = await loadPolicy(cpiId);
+    where = policy.studentsSeeOtherGroupIdeas
+      ? { courseInstanceId: cpiId }
+      : {
+          courseInstanceId: cpiId,
+          OR: [{ visibility: IdeaVisibility.PUBLIC_TO_STUDENTS }, { groupId }],
+        };
   }
 
   return prisma.projectIdea.findMany({
@@ -107,14 +128,14 @@ export async function updateIdea(userId: string, cpiId: string, ideaId: string, 
     throw new AuthError(409, `This idea is already ${idea.approvalStatus.toLowerCase()} and can't be edited`);
   }
 
-  const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
+  const policy = await loadPolicy(cpiId);
   return prisma.projectIdea.update({
     where: { id: ideaId },
     data: {
       title,
       description,
       revisionNote: null,
-      approvalStatus: cpi!.mode === CpiMode.COORDINATOR_MANAGED ? IdeaApprovalStatus.PENDING : null,
+      approvalStatus: policy.requireStudentIdeaApproval ? IdeaApprovalStatus.PENDING : null,
     },
   });
 }
@@ -159,16 +180,18 @@ export async function requestIdeaRevision(userId: string, cpiId: string, ideaId:
   return updated;
 }
 
-// Coordinator accepts/rejects a student idea — Coordinator-Managed only.
+// Coordinator accepts/rejects a student idea — only where the policy asks for
+// student ideas to be approved.
 export async function decideIdea(
   coordinatorUserId: string,
   cpiId: string,
   ideaId: string,
   decision: "APPROVED" | "REJECTED",
 ) {
-  const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
-  if (cpi.mode !== CpiMode.COORDINATOR_MANAGED) {
-    throw new AuthError(409, "Idea approval only applies in Coordinator-Managed mode");
+  await loadOwnedCpi(coordinatorUserId, cpiId);
+  const policy = await loadPolicy(cpiId);
+  if (!policy.requireStudentIdeaApproval) {
+    throw new AuthError(409, "This course does not require student ideas to be approved");
   }
 
   const idea = await prisma.projectIdea.findUnique({ where: { id: ideaId } });

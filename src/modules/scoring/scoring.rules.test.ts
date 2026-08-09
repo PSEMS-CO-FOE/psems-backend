@@ -85,11 +85,13 @@ async function setup(evaluatorsRequired: number, assignEvs: string[]) {
   const groupId = g.body.id as string;
 
   await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
-  await request(app).post(`/courses/${cpiId}/finalize-coordinator-managed`).set(as("coord")).expect(200);
+  await request(app).post(`/courses/${cpiId}/coordinator-managed-preset`).set(as("coord")).expect(200);
   for (const ev of ["ev1", "ev2", "hj"]) {
     await request(app).post(`/courses/${cpiId}/evaluators`).set(as("coord")).send({ lecturerUserId: userIds[ev] }).expect(201);
   }
   await request(app).post(`/courses/${cpiId}/head-judge`).set(as("coord")).send({ lecturerUserId: userIds.hj }).expect(200);
+  // A Head Judge is opt-in now; without this the coordinator would be the reviewer.
+  await request(app).patch(`/courses/${cpiId}/policy`).set(as("coord")).send({ headJudgeEnabled: true }).expect(200);
 
   await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
   const idea = await request(app).post(`/courses/${cpiId}/ideas`).set(as("coord")).send({ title: "I", description: "d" });
@@ -98,7 +100,7 @@ async function setup(evaluatorsRequired: number, assignEvs: string[]) {
 
   await openPhase(cpiId, CpiPhase.EVALUATION_CONFIG);
   const config = await request(app).put(`/courses/${cpiId}/evaluations/config`).set(as("coord")).send({
-    stages: [{ name: "S", weight: 100, evaluatorsRequired, submissionRequired: false, criteria: [{ name: "C1", weight: 50, maxScore: 10 }, { name: "C2", weight: 50, maxScore: 10 }] }],
+    stages: [{ name: "S", weight: 100, panelRules: [{ role: "EVALUATOR", minRequired: evaluatorsRequired }], submissionRequired: false, criteria: [{ name: "C1", weight: 50, maxScore: 10 }, { name: "C2", weight: 50, maxScore: 10 }] }],
   });
   const stage = config.body[0];
   const [c1, c2] = stage.criteria;
@@ -132,24 +134,36 @@ afterAll(async () => {
   await redis.quit();
 });
 
-describe("Scoring locks once a session awaits Head Judge review", () => {
-  it("rejects a resubmission after both evaluators have submitted (AWAITING_HEAD_JUDGE)", async () => {
+describe("Scoring locks once the reviewer closes it", () => {
+  it("rejects a resubmission once scoring has been closed", async () => {
     const { cpiId, sessionId, c1, c2 } = await setup(2, ["ev1", "ev2"]);
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1, score: 5 }, { criterionId: c2, score: 5 }] }).expect(201);
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1, score: 6 }, { criterionId: c2, score: 6 }] }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1, score: 5 }, { criterionId: c2, score: 5 }] , overallComment: 'Reviewed.' }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev2")).send({ scores: [{ criterionId: c1, score: 6 }, { criterionId: c2, score: 6 }] , overallComment: 'Reviewed.' }).expect(201);
 
-    // Session is now AWAITING_HEAD_JUDGE — ev1 can no longer silently revise.
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1, score: 9 }] }).expect(409);
+    // Both have submitted, but nothing advances on its own — ev1 can still revise.
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1, score: 7 }] , overallComment: 'Reviewed.' }).expect(201);
+
+    // Once the Head Judge closes scoring, that stops.
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/close-scoring`).set(as("hj")).expect(200);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1, score: 9 }] , overallComment: 'Reviewed.' }).expect(409);
   });
 });
 
-describe("A stage's evaluatorsRequired is enforced before completion", () => {
-  it("does not become ready when fewer than evaluatorsRequired evaluators are assigned", async () => {
+describe("A stage's required roles are reported, not enforced automatically", () => {
+  it("reports the shortfall when fewer evaluators are assigned than required", async () => {
     // Stage requires 2, but only ev1 is assigned.
     const { cpiId, sessionId, c1, c2 } = await setup(2, ["ev1"]);
-    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1, score: 8 }, { criterionId: c2, score: 8 }] }).expect(201);
+    await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/scores`).set(as("ev1")).send({ scores: [{ criterionId: c1, score: 8 }, { criterionId: c2, score: 8 }] , overallComment: 'Reviewed.' }).expect(201);
 
-    // ev1 fully scored, but the requirement of 2 isn't met -> HJ cannot approve.
+    // ev1 fully scored, but the requirement of 2 is unmet. The session does not
+    // advance, and the review screen says exactly how short it is.
+    const review = await request(app).get(`/courses/${cpiId}/sessions/${sessionId}/review`).set(as("hj"));
+    expect(review.status).toBe(200);
+    expect(review.body.readiness.allRequirementsMet).toBe(false);
+    expect(review.body.readiness.roles[0]).toMatchObject({ minRequired: 2, finished: 1 });
+
+    // Approving without closing is refused; closing short is the reviewer's call
+    // to make deliberately, because a no-show must not strand the group's mark.
     await request(app).post(`/courses/${cpiId}/sessions/${sessionId}/approve`).set(as("hj")).expect(409);
   });
 });

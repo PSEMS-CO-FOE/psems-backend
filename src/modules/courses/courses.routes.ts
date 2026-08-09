@@ -118,18 +118,15 @@ coursesRouter.post("/:cpiId/supervisors/respond", ...authed, inSupervisorAdditio
   }
 });
 
-coursesRouter.post(
-  "/:cpiId/finalize-coordinator-managed",
-  ...coordinatorOnly,
-  inSupervisorAddition,
-  async (req, res, next) => {
-    try {
-      return res.json(await courses.finalizeCoordinatorManaged(req.user!.user_id, req.params.cpiId));
-    } catch (err) {
-      return next(err);
-    }
-  },
-);
+// Applies the Coordinator-Managed preset. No longer phase-gated: it only seeds
+// policy defaults now, and a coordinator may reach for it at any point.
+coursesRouter.post("/:cpiId/coordinator-managed-preset", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    return res.json(await courses.applyCoordinatorManagedPreset(req.user!.user_id, req.params.cpiId));
+  } catch (err) {
+    return next(err);
+  }
+});
 
 // --- Step 3: evaluator + Head Judge assignment (both modes) ---
 

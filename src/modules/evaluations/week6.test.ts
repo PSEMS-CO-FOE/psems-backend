@@ -101,10 +101,10 @@ async function setupAcceptedCpi(name: string) {
 
 const FOUR_STAGE_RUBRIC = {
   stages: [
-    { name: "Proposal", weight: 15, evaluatorsRequired: 2, submissionRequired: true, criteria: [{ name: "Clarity", weight: 50, maxScore: 10 }, { name: "Feasibility", weight: 50, maxScore: 10 }] },
-    { name: "Mid Evaluation", weight: 25, evaluatorsRequired: 2, submissionRequired: false, criteria: [{ name: "Progress", weight: 100, maxScore: 20 }] },
-    { name: "Final Demo", weight: 40, evaluatorsRequired: 3, submissionRequired: false, criteria: [{ name: "Demo", weight: 100, maxScore: 40 }] },
-    { name: "Report", weight: 20, evaluatorsRequired: 1, submissionRequired: true, criteria: [{ name: "Writing", weight: 100, maxScore: 20 }] },
+    { name: "Proposal", weight: 15, panelRules: [{ role: "EVALUATOR", minRequired: 2 }], submissionRequired: true, criteria: [{ name: "Clarity", weight: 50, maxScore: 10 }, { name: "Feasibility", weight: 50, maxScore: 10 }] },
+    { name: "Mid Evaluation", weight: 25, panelRules: [{ role: "EVALUATOR", minRequired: 2 }], submissionRequired: false, criteria: [{ name: "Progress", weight: 100, maxScore: 20 }] },
+    { name: "Final Demo", weight: 40, panelRules: [{ role: "EVALUATOR", minRequired: 3 }], submissionRequired: false, criteria: [{ name: "Demo", weight: 100, maxScore: 40 }] },
+    { name: "Report", weight: 20, panelRules: [{ role: "EVALUATOR", minRequired: 1 }], submissionRequired: true, criteria: [{ name: "Writing", weight: 100, maxScore: 20 }] },
   ],
 };
 
@@ -169,7 +169,7 @@ describe("Week 6: evaluation config (4-stage rubric)", () => {
     const bad = await request(app)
       .put(`/courses/${cpiId}/evaluations/config`)
       .set(as("coord"))
-      .send({ stages: [{ name: "Only", weight: 90, evaluatorsRequired: 1, submissionRequired: false, criteria: [{ name: "X", weight: 100, maxScore: 10 }] }] });
+      .send({ stages: [{ name: "Only", weight: 90, panelRules: [{ role: "EVALUATOR", minRequired: 1 }], submissionRequired: false, criteria: [{ name: "X", weight: 100, maxScore: 10 }] }] });
     expect(bad.status).toBe(400);
 
     // Assign the pooled evaluator to the Proposal stage.

@@ -10,6 +10,7 @@ import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { assertRole } from "../shared/authorization";
 import { notify } from "../notifications/notifications.service";
+import { createPolicyData } from "../policy/policy.service";
 import { CreateCpiInput, SetTimelineInput } from "./courses.schemas";
 
 // Canonical phase order (spec 3.3 Step 2). Used to validate that a submitted
@@ -29,6 +30,8 @@ const PHASE_ORDER: CpiPhase[] = [
 
 export async function createCpi(coordinatorUserId: string, input: CreateCpiInput) {
   await assertRole(coordinatorUserId, Role.COURSE_COORDINATOR);
+  // The mode is a preset: it seeds the policy and is never consulted again, so
+  // every rule it implies can be changed afterwards.
   return prisma.courseInstance.create({
     data: {
       name: input.name,
@@ -36,8 +39,9 @@ export async function createCpi(coordinatorUserId: string, input: CreateCpiInput
       participationMode: input.participationMode,
       department: input.department,
       academicYear: input.academicYear,
+      mode: input.mode ?? null,
       createdById: coordinatorUserId,
-      // mode stays null until Step 3 determines it.
+      policy: { create: createPolicyData(input.mode ?? null) },
     },
   });
 }
@@ -105,12 +109,12 @@ export async function setTimeline(coordinatorUserId: string, cpiId: string, inpu
   });
 }
 
+// Inviting a supervisor no longer changes the CPI's mode, and is no longer
+// refused for a Coordinator-Managed one: a coordinator-run course can have
+// supervisors who post ideas and sit on panels. What they may do is a policy
+// question, not a consequence of having been invited.
 export async function inviteSupervisor(coordinatorUserId: string, cpiId: string, lecturerUserId: string) {
   const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
-  if (cpi.mode === CpiMode.COORDINATOR_MANAGED) {
-    throw new AuthError(409, "This CPI was finalized as Coordinator-Managed; supervisors cannot be added");
-  }
-
   const lecturer = await loadApprovedLecturer(lecturerUserId);
 
   const existing = await prisma.cpiSupervisor.findUnique({
@@ -120,18 +124,9 @@ export async function inviteSupervisor(coordinatorUserId: string, cpiId: string,
     throw new AuthError(409, "This lecturer has already been invited as a supervisor for this CPI");
   }
 
-  // Inviting the first supervisor is what flips the mode (spec 3.2) — there is
-  // no manual toggle. Both writes share a transaction so mode and membership
-  // never disagree.
-  const [supervisor] = await prisma.$transaction([
-    prisma.cpiSupervisor.create({
-      data: { courseInstanceId: cpiId, lecturerId: lecturer.id },
-    }),
-    prisma.courseInstance.update({
-      where: { id: cpiId },
-      data: { mode: CpiMode.SUPERVISOR_LED },
-    }),
-  ]);
+  const supervisor = await prisma.cpiSupervisor.create({
+    data: { courseInstanceId: cpiId, lecturerId: lecturer.id },
+  });
 
   await notify(lecturerUserId, {
     type: "SUPERVISOR_INVITED",
@@ -250,21 +245,24 @@ export async function respondToSupervisorInvite(
   });
 }
 
-export async function finalizeCoordinatorManaged(coordinatorUserId: string, cpiId: string) {
-  const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
-  if (cpi.mode === CpiMode.SUPERVISOR_LED) {
-    throw new AuthError(409, "This CPI is Supervisor-Led (supervisors were already added)");
-  }
+// Applies the Coordinator-Managed preset to the policy. No longer locks
+// anything and no longer refuses when supervisors exist — a coordinator-run
+// course may still have them; the preset just sets the coordinator as the one
+// who posts ideas and confirms selections. Individual settings stay editable.
+export async function applyCoordinatorManagedPreset(coordinatorUserId: string, cpiId: string) {
+  await loadOwnedCpi(coordinatorUserId, cpiId);
+  const preset = createPolicyData(CpiMode.COORDINATOR_MANAGED);
 
-  const supervisorCount = await prisma.cpiSupervisor.count({ where: { courseInstanceId: cpiId } });
-  if (supervisorCount > 0) {
-    throw new AuthError(409, "Remove invited supervisors before finalizing as Coordinator-Managed");
-  }
+  const [cpi] = await prisma.$transaction([
+    prisma.courseInstance.update({ where: { id: cpiId }, data: { mode: CpiMode.COORDINATOR_MANAGED } }),
+    prisma.cpiPolicy.upsert({
+      where: { courseInstanceId: cpiId },
+      update: preset,
+      create: { courseInstanceId: cpiId, ...preset },
+    }),
+  ]);
 
-  return prisma.courseInstance.update({
-    where: { id: cpiId },
-    data: { mode: CpiMode.COORDINATOR_MANAGED },
-  });
+  return cpi;
 }
 
 export async function assignEvaluator(coordinatorUserId: string, cpiId: string, lecturerUserId: string) {

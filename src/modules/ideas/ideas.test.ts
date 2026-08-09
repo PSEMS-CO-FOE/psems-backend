@@ -217,7 +217,7 @@ describe("Week 4: idea visibility + approval — Coordinator-Managed", () => {
 
     // Skip supervisors -> COORDINATOR_MANAGED.
     await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
-    await request(app).post(`/courses/${cpiId}/finalize-coordinator-managed`).set(as("coord")).expect(200);
+    await request(app).post(`/courses/${cpiId}/coordinator-managed-preset`).set(as("coord")).expect(200);
 
     await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
     await request(app).post(`/courses/${cpiId}/ideas`).set(as("coord")).send({ title: "COORD-IDEA", description: "d" }).expect(201);

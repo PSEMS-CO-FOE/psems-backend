@@ -13,8 +13,8 @@ const inExecution = requirePhase(CpiPhase.EVALUATION_EXECUTION);
 
 scoringRouter.post("/sessions/:sessionId/scores", ...authed, inExecution, async (req, res, next) => {
   try {
-    const { scores } = submitScoresSchema.parse(req.body);
-    return res.status(201).json(await scoring.submitScores(req.user!.user_id, req.params.cpiId, req.params.sessionId, scores));
+    const input = submitScoresSchema.parse(req.body);
+    return res.status(201).json(await scoring.submitScores(req.user!.user_id, req.params.cpiId, req.params.sessionId, input));
   } catch (err) {
     return next(err);
   }
