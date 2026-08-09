@@ -46,6 +46,16 @@ groupsRouter.post("/:groupId/respond", ...studentAuthed, inRegistration, async (
 
 // Reads are not phase-gated. /mine and /invites must precede /:groupId so they
 // aren't captured as a groupId.
+// A student taking part alone: creates their group of one, or returns it if it
+// already exists. Idempotent, so the UI can simply call it.
+groupsRouter.post("/solo", ...studentAuthed, inRegistration, async (req, res, next) => {
+  try {
+    return res.status(201).json(await groups.ensureSoloGroup(req.user!.user_id, req.params.cpiId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 groupsRouter.get("/mine", ...studentAuthed, async (req, res, next) => {
   try {
     return res.json(await groups.getMyGroup(req.user!.user_id, req.params.cpiId));

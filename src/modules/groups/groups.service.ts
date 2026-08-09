@@ -1,7 +1,8 @@
-import { CpiPhase, InvitationStatus } from "@prisma/client";
+import { CpiParticipationMode, CpiPhase, InvitationStatus } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { notify } from "../notifications/notifications.service";
+import { loadPolicy } from "../shared/cpiMembership";
 
 // Resolves the Student profile for a user, or 403 if they aren't a student.
 async function loadStudent(userId: string) {
@@ -51,7 +52,56 @@ export async function createGroup(userId: string, cpiId: string, name: string) {
   });
 }
 
+// A student taking part on their own still needs a group, because every step
+// after this — ideas, selection, allocation, sessions, marks — is keyed off one.
+// So a solo participant gets a group of one rather than a parallel code path.
+//
+// CpiParticipationMode was stored and read by nothing before this; it and the
+// policy switch together are what finally make individual participation real.
+export async function ensureSoloGroup(userId: string, cpiId: string) {
+  const student = await loadStudent(userId);
+
+  const existing = await prisma.groupMember.findFirst({
+    where: { studentId: student.id, status: InvitationStatus.ACCEPTED, group: { courseInstanceId: cpiId } },
+    include: { group: true },
+  });
+  if (existing) return existing.group;
+
+  const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
+  if (!cpi) throw new AuthError(404, "CPI not found");
+
+  const policy = await loadPolicy(cpiId);
+  const individualAllowed =
+    cpi.participationMode === CpiParticipationMode.INDIVIDUAL || policy.allowIndividualParticipation;
+  if (!individualAllowed) {
+    throw new AuthError(409, "This course requires you to join or create a group");
+  }
+  if (!policy.autoCreateSoloGroup) {
+    throw new AuthError(409, "Create your group before continuing");
+  }
+
+  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { fullName: true, email: true } });
+
+  return prisma.group.create({
+    data: {
+      courseInstanceId: cpiId,
+      // Named after the student, since a solo "group" is really just them.
+      name: user.fullName || user.email,
+      leaderStudentId: student.id,
+      members: {
+        create: { studentId: student.id, status: InvitationStatus.ACCEPTED, joinedAt: new Date() },
+      },
+    },
+    include: { members: { include: { student: memberStudentSelect } } },
+  });
+}
+
 export async function inviteMember(leaderUserId: string, cpiId: string, groupId: string, inviteeEmail: string) {
+  const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
+  if (cpi?.participationMode === CpiParticipationMode.INDIVIDUAL) {
+    throw new AuthError(409, "This course is taken individually — there is nobody to invite");
+  }
+
   const leader = await loadStudent(leaderUserId);
   const group = await loadGroupInCpi(groupId, cpiId);
   if (group.leaderStudentId !== leader.id) {
