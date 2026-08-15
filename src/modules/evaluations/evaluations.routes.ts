@@ -11,6 +11,7 @@ import {
   pooledShareSchema,
   setPanelRulesSchema,
 } from "./evaluations.schemas";
+import { timerSegmentTemplateSchema } from "../scheduling/scheduling.schemas";
 import * as evaluations from "./evaluations.service";
 import { applyStagePanelSchema } from "../panel/panel.schemas";
 import { applyPanelToStage } from "../panel/panel.service";
@@ -70,6 +71,17 @@ evaluationsRouter.put("/stages/:stageId/panel-rules", ...coordinatorOnly, async 
   try {
     const input = setPanelRulesSchema.parse(req.body);
     return res.json(await evaluations.setPanelRules(req.user!.user_id, req.params.cpiId, req.params.stageId, input));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+evaluationsRouter.put("/stages/:stageId/timer-segments", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const { segments } = timerSegmentTemplateSchema.parse(req.body);
+    return res.json(
+      await evaluations.setTimerSegmentTemplates(req.user!.user_id, req.params.cpiId, req.params.stageId, segments),
+    );
   } catch (err) {
     return next(err);
   }

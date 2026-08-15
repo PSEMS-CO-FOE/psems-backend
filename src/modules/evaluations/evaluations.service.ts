@@ -2,6 +2,7 @@ import { MarkCounting, PanelRole } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
+import { setSegmentTemplates } from "../scheduling/timer.service";
 import {
   getAcceptedSupervisorLecturerId,
   getCpiEvaluatorId,
@@ -73,6 +74,9 @@ export async function setEvaluationConfig(coordinatorUserId: string, cpiId: stri
             })),
           },
           panelRules: { create: stage.panelRules ?? DEFAULT_PANEL_RULES },
+          timerSegments: {
+            create: (stage.timerSegments ?? []).map((seg, si) => ({ ...seg, orderIndex: si })),
+          },
         },
       }),
     ),
@@ -118,6 +122,18 @@ export async function setPanelRules(
   ]);
 
   return prisma.stagePanelRule.findMany({ where: { evaluationStageId: stageId } });
+}
+
+// Allowed after submissions exist, like the panel rules, because a running order
+// is often fixed on the day.
+export async function setTimerSegmentTemplates(
+  coordinatorUserId: string,
+  cpiId: string,
+  stageId: string,
+  segments: { name: string; targetSeconds: number }[],
+) {
+  await loadStage(coordinatorUserId, cpiId, stageId);
+  return setSegmentTemplates(stageId, segments);
 }
 
 // Weight the pooled contribution from panelists whose marks the coordinator
@@ -200,6 +216,7 @@ export async function getEvaluationConfig(userId: string, cpiId: string) {
     include: {
       criteria: { orderBy: { orderIndex: "asc" } },
       panelRules: true,
+      timerSegments: { orderBy: { orderIndex: "asc" } },
       evaluators: {
         include: {
           cpiEvaluator: {

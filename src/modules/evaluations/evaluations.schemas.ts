@@ -21,6 +21,12 @@ const panelRuleSchema = z.object({
   openToAll: z.boolean().default(false),
 });
 
+// Optional. A stage with no parts just runs one clock.
+const timerSegmentSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+  targetSeconds: z.number().int().min(5).max(21_600),
+});
+
 const stageSchema = z
   .object({
     name: z.string().trim().min(1).max(120),
@@ -36,6 +42,7 @@ const stageSchema = z
     // Omitted means "one evaluator required", which is the least surprising
     // default and matches how stages behaved before panels existed.
     panelRules: z.array(panelRuleSchema).max(8).optional(),
+    timerSegments: z.array(timerSegmentSchema).max(12).optional(),
     criteria: z.array(criterionSchema).min(1),
   })
   .refine((s) => !!s.submissionWindowStart === !!s.submissionWindowEnd, {
