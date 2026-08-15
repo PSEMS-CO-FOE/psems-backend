@@ -50,6 +50,22 @@ enum AvailabilityRequirement {
   NONE
 }
 
+// One answer in the availability grid. TENTATIVE is kept separate because
+// "maybe" is still useful when building a timetable.
+enum AvailabilityStatus {
+  AVAILABLE
+  TENTATIVE
+  UNAVAILABLE
+}
+
+// Whether a timer part finished on time, late or early. Worked out when the part
+// ends, and can be changed by hand.
+enum SegmentTimeliness {
+  ON_TIME
+  OVERTIME
+  UNDER
+}
+
 // What a person DOES on an evaluation panel. Deliberately independent of who
 // they are (internal lecturer, coordinator, or external guest): an industry
 // client whose problem a group is solving can sit as SENIOR_EVALUATOR on that
@@ -229,18 +245,18 @@ model User {
 
   student              Student?
   lecturer             Lecturer?
-  createdCpis          CourseInstance[]         @relation("CpiCreatedBy")
+  createdCpis          CourseInstance[]      @relation("CpiCreatedBy")
   auditLogs            AuditLog[]
   provisioningLogs     ProvisioningLog[]
   postedIdeas          ProjectIdea[]
   notifications        Notification[]
-  panelSeats           SessionPanelist[]        @relation("PanelistUser")
-  panelSeatsAdded      SessionPanelist[]        @relation("PanelistAddedBy")
-  guestsInvited        GuestPanelist[]          @relation("GuestInvitedBy")
-  sessionReviews       SessionReview[]          @relation("SessionReviewer")
-  pooledShareDecisions PooledShareDecision[]    @relation("PooledShareDecidedBy")
+  panelSeats           SessionPanelist[]     @relation("PanelistUser")
+  panelSeatsAdded      SessionPanelist[]     @relation("PanelistAddedBy")
+  guestsInvited        GuestPanelist[]       @relation("GuestInvitedBy")
+  sessionReviews       SessionReview[]       @relation("SessionReviewer")
+  pooledShareDecisions PooledShareDecision[] @relation("PooledShareDecidedBy")
   profile              UserProfile?
-  supervisorDecisions  SupervisorRequest[]      @relation("SupervisorRequestDecidedBy")
+  supervisorDecisions  SupervisorRequest[]   @relation("SupervisorRequestDecidedBy")
 
   @@map("users")
 }
@@ -269,10 +285,10 @@ model Student {
 // Evaluator / Head Judge are CPI-scoped roles a lecturer plays, added in
 // Week 3 via junction tables — this is the base account record).
 model Lecturer {
-  id               String                 @id @default(uuid())
-  userId           String                 @unique @map("user_id")
-  selfRegistered   Boolean                @default(false) @map("self_registered")
-  approvalStatus   LecturerApprovalStatus @default(PENDING) @map("approval_status")
+  id             String                 @id @default(uuid())
+  userId         String                 @unique @map("user_id")
+  selfRegistered Boolean                @default(false) @map("self_registered")
+  approvalStatus LecturerApprovalStatus @default(PENDING) @map("approval_status")
 
   user                  User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   cpiSupervisorRoles    CpiSupervisor[]
@@ -283,6 +299,7 @@ model Lecturer {
   supervisorSelections  ProjectSelection[]
   supervisorAllocations ProjectAllocation[]
   panelSeats            SessionPanelist[]
+  panelAvailability     PanelAvailability[]
 
   @@map("lecturers")
 }
@@ -291,36 +308,37 @@ model Lecturer {
 // (spec 3.1). Mode is a preset chosen at creation that seeds CpiPolicy; it is a
 // label from then on, so behaviour is read from the policy, never from mode.
 model CourseInstance {
-  id                    String               @id @default(uuid())
-  name                  String // e.g. "Computer Engineering FYP 2026"
-  projectType           String               @map("project_type") // free-text; coordinator-defined
+  id          String @id @default(uuid())
+  name        String // e.g. "Computer Engineering FYP 2026"
+  projectType String @map("project_type") // free-text; coordinator-defined
 
-  participationMode     CpiParticipationMode @map("participation_mode")
-  department            String
-  academicYear          String               @map("academic_year")
-  mode                  CpiMode?
-  allocationsFinalizedAt DateTime?           @map("allocations_finalized_at")
-  marksPublishedAt      DateTime?            @map("marks_published_at")
-  createdById           String               @map("created_by_id")
-  createdAt             DateTime             @default(now()) @map("created_at")
+  participationMode      CpiParticipationMode @map("participation_mode")
+  department             String
+  academicYear           String               @map("academic_year")
+  mode                   CpiMode?
+  allocationsFinalizedAt DateTime?            @map("allocations_finalized_at")
+  marksPublishedAt       DateTime?            @map("marks_published_at")
+  createdById            String               @map("created_by_id")
+  createdAt              DateTime             @default(now()) @map("created_at")
 
-  createdBy           User                 @relation("CpiCreatedBy", fields: [createdById], references: [id])
-  policy              CpiPolicy?
-  guestPanelists      GuestPanelist[]
-  timeline            CpiTimeline[]
-  supervisors         CpiSupervisor[]
-  evaluators          CpiEvaluator[]
-  groups              Group[]
-  ideas               ProjectIdea[]
-  interestExpressions InterestExpression[]
-  supervisorRequests  SupervisorRequest[]
-  projectSelections   ProjectSelection[]
-  allocations         ProjectAllocation[]
-  evaluationStages    EvaluationStage[]
-  submissions         Submission[]
-  availability        EvaluatorAvailability[]
-  evaluationSessions  EvaluationSession[]
-  finalMarks          FinalMark[]
+  createdBy            User                  @relation("CpiCreatedBy", fields: [createdById], references: [id])
+  policy               CpiPolicy?
+  guestPanelists       GuestPanelist[]
+  timeline             CpiTimeline[]
+  supervisors          CpiSupervisor[]
+  evaluators           CpiEvaluator[]
+  groups               Group[]
+  ideas                ProjectIdea[]
+  interestExpressions  InterestExpression[]
+  supervisorRequests   SupervisorRequest[]
+  projectSelections    ProjectSelection[]
+  allocations          ProjectAllocation[]
+  evaluationStages     EvaluationStage[]
+  submissions          Submission[]
+  availabilityTemplate AvailabilityTemplate?
+  panelAvailability    PanelAvailability[]
+  evaluationSessions   EvaluationSession[]
+  finalMarks           FinalMark[]
 
   @@map("course_instances")
 }
@@ -402,10 +420,9 @@ model CpiEvaluator {
   isHeadJudge      Boolean  @default(false) @map("is_head_judge")
   assignedAt       DateTime @default(now()) @map("assigned_at")
 
-  courseInstance   CourseInstance          @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
-  lecturer         Lecturer                @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  courseInstance   CourseInstance    @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  lecturer         Lecturer          @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
   stageAssignments StageEvaluator[]
-  availability     EvaluatorAvailability[]
   panelSeats       SessionPanelist[]
 
   @@unique([courseInstanceId, lecturerId])
@@ -491,11 +508,11 @@ model ProjectIdea {
 // supervisor for its own idea) / (supervisor is willing on a student idea).
 // Exactly one of groupId / supervisorLecturerId is set, per `type`.
 model InterestExpression {
-  id                   String   @id @default(uuid())
-  courseInstanceId     String   @map("course_instance_id")
-  ideaId               String   @map("idea_id")
+  id                   String    @id @default(uuid())
+  courseInstanceId     String    @map("course_instance_id")
+  ideaId               String    @map("idea_id")
   type                 EoiType
-  groupId              String?  @map("group_id")
+  groupId              String?   @map("group_id")
   supervisorLecturerId String?   @map("supervisor_lecturer_id")
   // Soft withdrawal: the row stays so the audit trail survives and the unique
   // pair still holds when the same interest is expressed again.
@@ -541,7 +558,6 @@ model ProjectSelection {
   @@index([groupId])
   @@map("project_selections")
 }
-
 
 // Supervisors attached to an idea. The author is the primary; anyone else was
 // named by them (from the approved list, or invited) and must accept. Shown to
@@ -661,21 +677,21 @@ model ProjectAllocation {
 // A customizable evaluation stage (spec 3.3 Step 8 / table evaluation_stages).
 // weight is a percentage; stage weights sum to 100 across the CPI.
 model EvaluationStage {
-  id                    String    @id @default(uuid())
-  courseInstanceId      String    @map("course_instance_id")
+  id                    String               @id @default(uuid())
+  courseInstanceId      String               @map("course_instance_id")
   name                  String
   weight                Int // percent; stages sum to 100 per CPI
-  submissionRequired    Boolean   @default(false) @map("submission_required")
+  submissionRequired    Boolean              @default(false) @map("submission_required")
   // Per-stage submission window; when null, submissions fall back to the CPI's
   // PROPOSAL_SUBMISSION phase window (so multi-stage submissions can differ).
-  submissionWindowStart DateTime? @map("submission_window_start")
-  submissionWindowEnd   DateTime? @map("submission_window_end")
+  submissionWindowStart DateTime?            @map("submission_window_start")
+  submissionWindowEnd   DateTime?            @map("submission_window_end")
   // Per-stage scoring/presentation window; when set, this stage can only be
   // scored within it (so proposal/mid/final each run at their own time inside
   // the EVALUATION_EXECUTION phase). When null, the phase window alone governs.
-  executionWindowStart  DateTime? @map("execution_window_start")
-  executionWindowEnd    DateTime? @map("execution_window_end")
-  orderIndex            Int       @map("order_index")
+  executionWindowStart  DateTime?            @map("execution_window_start")
+  executionWindowEnd    DateTime?            @map("execution_window_end")
+  orderIndex            Int                  @map("order_index")
   // Whether panelists on this stage see each other's scores before review.
   // ISOLATED unless the coordinator deliberately opens it for an open event.
   panelScoreVisibility  PanelScoreVisibility @default(ISOLATED) @map("panel_score_visibility")
@@ -684,14 +700,15 @@ model EvaluationStage {
   // weighted by pooledSharePercent. Null means they do not count at all.
   // pooledScorerLimit caps how many of them count and is validated as uniform
   // across every group in the stage, so panels of unequal size stay comparable.
-  pooledSharePercent    Float?    @map("pooled_share_percent")
-  pooledScorerLimit     Int?      @map("pooled_scorer_limit")
-  createdAt             DateTime  @default(now()) @map("created_at")
+  pooledSharePercent    Float?               @map("pooled_share_percent")
+  pooledScorerLimit     Int?                 @map("pooled_scorer_limit")
+  createdAt             DateTime             @default(now()) @map("created_at")
 
-  courseInstance       CourseInstance        @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  courseInstance       CourseInstance         @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
   criteria             RubricCriterion[]
   evaluators           StageEvaluator[]
   panelRules           StagePanelRule[]
+  timerSegments        TimerSegmentTemplate[]
   pooledShareDecisions PooledShareDecision[]
   submissions          Submission[]
   sessions             EvaluationSession[]
@@ -704,16 +721,16 @@ model EvaluationStage {
 // A rubric criterion within a stage (spec table rubric_criteria). weight is a
 // percentage; criteria weights sum to 100 within their stage.
 model RubricCriterion {
-  id                String  @id @default(uuid())
-  evaluationStageId String  @map("evaluation_stage_id")
+  id                String         @id @default(uuid())
+  evaluationStageId String         @map("evaluation_stage_id")
   name              String
   description       String?
   weight            Int // percent within the stage; criteria sum to 100
-  maxScore          Int     @map("max_score")
+  maxScore          Int            @map("max_score")
   // GROUP criteria are scored once for the whole group; INDIVIDUAL criteria are
   // scored once per student, which is what lets members of one group differ.
   level             CriterionLevel @default(GROUP)
-  orderIndex        Int     @map("order_index")
+  orderIndex        Int            @map("order_index")
 
   stage  EvaluationStage @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
   scores RubricScore[]
@@ -876,54 +893,136 @@ model Submission {
   @@map("submissions")
 }
 
-// Availability slots an evaluator offers for scheduling (spec 3.3 Step 8 / table
-// evaluator_availability).
-model EvaluatorAvailability {
+// The shape of a course's availability grid: a range of dates across the top and
+// named time slots down the side, so everyone answers the same questions.
+model AvailabilityTemplate {
   id               String   @id @default(uuid())
-  courseInstanceId String   @map("course_instance_id")
-  cpiEvaluatorId   String   @map("cpi_evaluator_id")
-  slotStart        DateTime @map("slot_start")
-  slotEnd          DateTime @map("slot_end")
+  courseInstanceId String   @unique @map("course_instance_id")
+  windowStart      DateTime @map("window_start") @db.Date
+  windowEnd        DateTime @map("window_end") @db.Date
   createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
-  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
-  cpiEvaluator   CpiEvaluator   @relation(fields: [cpiEvaluatorId], references: [id], onDelete: Cascade)
+  courseInstance CourseInstance             @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  slots          AvailabilityTemplateSlot[]
 
+  @@map("availability_templates")
+}
+
+// One row of the grid, e.g. "Morning 09:00–12:00". Times are plain HH:mm text
+// because the slot repeats on every date, so it is not one exact moment.
+model AvailabilityTemplateSlot {
+  id         String @id @default(uuid())
+  templateId String @map("template_id")
+  name       String
+  startTime  String @map("start_time") // HH:mm, local to the department
+  endTime    String @map("end_time") // HH:mm
+  orderIndex Int    @map("order_index")
+
+  template AvailabilityTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  entries  PanelAvailability[]
+
+  @@index([templateId])
+  @@map("availability_template_slots")
+}
+
+// One person's answer for one cell. Linked to the lecturer, not to their place in
+// the evaluator list, so a supervisor who is not an evaluator can still answer.
+model PanelAvailability {
+  id               String             @id @default(uuid())
+  courseInstanceId String             @map("course_instance_id")
+  lecturerId       String             @map("lecturer_id")
+  templateSlotId   String             @map("template_slot_id")
+  slotDate         DateTime           @map("slot_date") @db.Date
+  status           AvailabilityStatus
+  note             String?
+  updatedAt        DateTime           @updatedAt @map("updated_at")
+
+  courseInstance CourseInstance           @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  lecturer       Lecturer                 @relation(fields: [lecturerId], references: [id], onDelete: Cascade)
+  templateSlot   AvailabilityTemplateSlot @relation(fields: [templateSlotId], references: [id], onDelete: Cascade)
+
+  @@unique([lecturerId, slotDate, templateSlotId])
   @@index([courseInstanceId])
-  @@map("evaluator_availability")
+  @@map("panel_availability")
 }
 
 // A scheduled evaluation of one group at one stage (spec table
 // evaluation_sessions). Its evaluators are the stage's assigned evaluators;
 // scores hang off it. status tracks the Flow B lifecycle.
 model EvaluationSession {
-  id                String        @id @default(uuid())
-  courseInstanceId  String        @map("course_instance_id")
-  groupId           String        @map("group_id")
-  evaluationStageId String        @map("evaluation_stage_id")
-  scheduledStart    DateTime?     @map("scheduled_start")
-  scheduledEnd      DateTime?     @map("scheduled_end")
-  location          String? // free text: room, video link, or blank
+  id                          String        @id @default(uuid())
+  courseInstanceId            String        @map("course_instance_id")
+  groupId                     String        @map("group_id")
+  evaluationStageId           String        @map("evaluation_stage_id")
+  scheduledStart              DateTime?     @map("scheduled_start")
+  scheduledEnd                DateTime?     @map("scheduled_end")
+  // How long this group should get. Can be set before any times are chosen.
+  allocatedMinutes            Int?          @map("allocated_minutes")
+  location                    String? // free text: room, video link, or blank
   // Final elapsed presentation time (set when the shared timer is stopped).
-  presentationDurationSeconds Int? @map("presentation_duration_seconds")
-  // Shared presentation timer, live across everyone viewing the session. The
-  // live elapsed value is accumulated + (running ? now - startedAt : 0).
-  timerStartedAt          DateTime? @map("timer_started_at")
-  timerAccumulatedSeconds Int       @default(0) @map("timer_accumulated_seconds")
-  timerRunning            Boolean   @default(false) @map("timer_running")
-  status            SessionStatus @default(SCHEDULED)
-  createdAt         DateTime      @default(now()) @map("created_at")
+  presentationDurationSeconds Int?          @map("presentation_duration_seconds")
+  // The clock for the whole session. Time so far is accumulated, plus the time
+  // since it was started if it is running. Each part has its own clock in
+  // SessionTimerSegment.
+  timerStartedAt              DateTime?     @map("timer_started_at")
+  timerAccumulatedSeconds     Int           @default(0) @map("timer_accumulated_seconds")
+  timerRunning                Boolean       @default(false) @map("timer_running")
+  // Which part the room is on. Only a Next moves it; reaching a target does not.
+  currentSegmentIndex         Int           @default(0) @map("current_segment_index")
+  status                      SessionStatus @default(SCHEDULED)
+  createdAt                   DateTime      @default(now()) @map("created_at")
 
-  courseInstance CourseInstance    @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
-  group          Group             @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  stage          EvaluationStage   @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+  courseInstance CourseInstance        @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  group          Group                 @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  stage          EvaluationStage       @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
   panelists      SessionPanelist[]
   scores         RubricScore[]
+  timerSegments  SessionTimerSegment[]
   review         SessionReview?
 
   @@unique([groupId, evaluationStageId])
   @@index([courseInstanceId])
   @@map("evaluation_sessions")
+}
+
+// The order a stage's presentations follow. It is copied onto a session the first
+// time its clock runs, so changing it later cannot change a finished session.
+model TimerSegmentTemplate {
+  id                String @id @default(uuid())
+  evaluationStageId String @map("evaluation_stage_id")
+  name              String
+  targetSeconds     Int    @map("target_seconds")
+  orderIndex        Int    @map("order_index")
+
+  stage EvaluationStage @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+
+  @@index([evaluationStageId])
+  @@map("timer_segment_templates")
+}
+
+// One part of one session's presentation, with its own clock. Going past the
+// target does not move to the next part, it just counts the extra time. Moving on
+// is always done by hand, which is what makes running late visible.
+model SessionTimerSegment {
+  id                  String             @id @default(uuid())
+  evaluationSessionId String             @map("evaluation_session_id")
+  orderIndex          Int                @map("order_index")
+  name                String
+  targetSeconds       Int                @map("target_seconds")
+  accumulatedSeconds  Int                @default(0) @map("accumulated_seconds")
+  startedAt           DateTime?          @map("started_at")
+  running             Boolean            @default(false)
+  completedAt         DateTime?          @map("completed_at")
+  overranSeconds      Int                @default(0) @map("overran_seconds")
+  timeliness          SegmentTimeliness? // null until the part finishes
+  // True when someone changed the on time / late / early result by hand.
+  timelinessManual    Boolean            @default(false) @map("timeliness_manual")
+
+  session EvaluationSession @relation(fields: [evaluationSessionId], references: [id], onDelete: Cascade)
+
+  @@unique([evaluationSessionId, orderIndex])
+  @@map("session_timer_segments")
 }
 
 // One panelist's score for one criterion in a session (spec table rubric_scores).
