@@ -66,7 +66,19 @@ export interface ScheduleConflict {
 }
 
 const sessionInclude = {
-  group: { select: { id: true, name: true } },
+  // Members come along so a panelist can score INDIVIDUAL criteria per student
+  // without a second request for every session on the page.
+  group: {
+    select: {
+      id: true,
+      name: true,
+      members: {
+        where: { status: InvitationStatus.ACCEPTED },
+        select: { student: { select: { id: true, studentId: true, user: { select: { fullName: true, email: true } } } } },
+        orderBy: { student: { studentId: "asc" } },
+      },
+    },
+  },
   stage: { select: { id: true, name: true } },
 } satisfies Prisma.EvaluationSessionInclude;
 
