@@ -254,6 +254,7 @@ model User {
   panelSeatsAdded      SessionPanelist[]     @relation("PanelistAddedBy")
   guestsInvited        GuestPanelist[]       @relation("GuestInvitedBy")
   sessionReviews       SessionReview[]       @relation("SessionReviewer")
+  markPublications     MarkPublication[]     @relation("MarksPublishedBy")
   pooledShareDecisions PooledShareDecision[] @relation("PooledShareDecidedBy")
   profile              UserProfile?
   supervisorDecisions  SupervisorRequest[]   @relation("SupervisorRequestDecidedBy")
@@ -277,6 +278,7 @@ model Student {
   ledGroups        Group[]       @relation("GroupLeader")
   groupMemberships GroupMember[]
   rubricScores     RubricScore[]
+  studentMarks     StudentMark[]
 
   @@map("students")
 }
@@ -317,7 +319,6 @@ model CourseInstance {
   academicYear           String               @map("academic_year")
   mode                   CpiMode?
   allocationsFinalizedAt DateTime?            @map("allocations_finalized_at")
-  marksPublishedAt       DateTime?            @map("marks_published_at")
   createdById            String               @map("created_by_id")
   createdAt              DateTime             @default(now()) @map("created_at")
 
@@ -339,6 +340,9 @@ model CourseInstance {
   panelAvailability    PanelAvailability[]
   evaluationSessions   EvaluationSession[]
   finalMarks           FinalMark[]
+  studentMarks         StudentMark[]
+  gradeBands           GradeBand[]
+  markPublications     MarkPublication[]
 
   @@map("course_instances")
 }
@@ -448,6 +452,7 @@ model Group {
   submissions         Submission[]
   evaluationSessions  EvaluationSession[]
   finalMarks          FinalMark[]
+  studentMarks        StudentMark[]
 
   @@index([courseInstanceId])
   @@map("groups")
@@ -713,6 +718,8 @@ model EvaluationStage {
   submissions          Submission[]
   sessions             EvaluationSession[]
   finalMarks           FinalMark[]
+  studentMarks         StudentMark[]
+  markPublications     MarkPublication[]
 
   @@index([courseInstanceId])
   @@map("evaluation_stages")
@@ -1163,6 +1170,78 @@ model FinalMark {
 // In-app notification (spec Section 10 / table notifications). type is an event
 // key (e.g. "MARKS_PUBLISHED"); email delivery, when requested, goes through the
 // shared email queue. readAt null = unread.
+// One student's mark for one stage. FinalMark stays as the group's view; this is
+// what lets two members of the same group end up with different results, because
+// INDIVIDUAL criteria are scored per person while GROUP criteria are shared.
+model StudentMark {
+  id                         String   @id @default(uuid())
+  courseInstanceId           String   @map("course_instance_id")
+  studentId                  String   @map("student_id")
+  groupId                    String   @map("group_id")
+  evaluationStageId          String   @map("evaluation_stage_id")
+  // The two halves kept apart so a student can see which part of their mark was
+  // the group's work and which was their own.
+  groupComponentPercent      Float    @map("group_component_percent")
+  individualComponentPercent Float?   @map("individual_component_percent")
+  stageScorePercent          Float    @map("stage_score_percent")
+  weightedContribution       Float    @map("weighted_contribution")
+  createdAt                  DateTime @default(now()) @map("created_at")
+  updatedAt                  DateTime @updatedAt @map("updated_at")
+
+  courseInstance CourseInstance  @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  student        Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  group          Group           @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  stage          EvaluationStage @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+
+  @@unique([studentId, evaluationStageId])
+  @@index([courseInstanceId])
+  @@map("student_marks")
+}
+
+// A letter grade and the lowest mark that earns it. Only used when the course
+// has grading turned on; courses that award CA marks only have no bands.
+model GradeBand {
+  id               String @id @default(uuid())
+  courseInstanceId String @map("course_instance_id")
+  label            String // A+, A, B+ ...
+  minPercent       Float  @map("min_percent")
+  orderIndex       Int    @map("order_index")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+
+  @@unique([courseInstanceId, label])
+  @@index([courseInstanceId])
+  @@map("grade_bands")
+}
+
+// What students may see, per stage or for the whole course. Replaces a single
+// timestamp that could be set once and never cleared. Marks and comments are
+// separate switches, so feedback can go out before the numbers.
+//
+// evaluationStageId null means the whole course. Postgres treats nulls as
+// different from each other, so that row is kept unique by a partial index in
+// the migration rather than by @@unique here.
+model MarkPublication {
+  id                String    @id @default(uuid())
+  courseInstanceId  String    @map("course_instance_id")
+  evaluationStageId String?   @map("evaluation_stage_id")
+  publishMarks      Boolean   @default(false) @map("publish_marks")
+  publishComments   Boolean   @default(false) @map("publish_comments")
+  // Released separately and usually later: marks go out during the semester,
+  // the grade only once everything is in.
+  publishGrades     Boolean   @default(false) @map("publish_grades")
+  publishedAt       DateTime? @map("published_at")
+  publishedById     String?   @map("published_by_id")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  courseInstance CourseInstance   @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  stage          EvaluationStage? @relation(fields: [evaluationStageId], references: [id], onDelete: Cascade)
+  publishedBy    User?            @relation("MarksPublishedBy", fields: [publishedById], references: [id])
+
+  @@index([courseInstanceId])
+  @@map("mark_publications")
+}
+
 model Notification {
   id               String    @id @default(uuid())
   recipientUserId  String    @map("recipient_user_id")
