@@ -47,6 +47,37 @@ async function supervisedProjects(userId: string) {
   }));
 }
 
+// The projects a student actually did, derived from their group's allocations
+// the same way a lecturer's supervised list is. Stored nowhere, so it can never
+// drift from what happened. Empty for anyone who is not a student, which is what
+// lets the profile page hide the tab rather than show it blank.
+async function ownProjects(userId: string) {
+  const student = await prisma.student.findUnique({ where: { userId } });
+  if (!student) return [];
+
+  const allocations = await prisma.projectAllocation.findMany({
+    where: { group: { members: { some: { studentId: student.id, status: "ACCEPTED" } } } },
+    orderBy: { createdAt: "desc" },
+    include: {
+      idea: { select: { title: true } },
+      courseInstance: { select: { id: true, name: true, academicYear: true, projectType: true } },
+      group: { select: { name: true } },
+      supervisor: { select: { user: { select: { id: true, fullName: true, email: true } } } },
+    },
+  });
+
+  return allocations.map((a) => ({
+    title: a.idea.title,
+    course: a.courseInstance.name,
+    academicYear: a.courseInstance.academicYear,
+    projectType: a.courseInstance.projectType,
+    groupName: a.group.name,
+    supervisor: a.supervisor
+      ? { id: a.supervisor.user.id, fullName: a.supervisor.user.fullName, email: a.supervisor.user.email }
+      : null,
+  }));
+}
+
 // An institution-wide directory: any logged-in user may read any profile.
 // Guests authenticating with a scoring link never reach this — their access is
 // scoped to the sessions they mark, and they hold no account.
@@ -67,10 +98,13 @@ export async function getProfile(targetUserId: string) {
       select: { id: true, email: true, fullName: true, role: true },
     }));
 
+  const [supervised, own] = await Promise.all([supervisedProjects(targetUserId), ownProjects(targetUserId)]);
+
   return {
     profile,
     user: owner,
-    supervisedProjects: await supervisedProjects(targetUserId),
+    supervisedProjects: supervised,
+    ownProjects: own,
   };
 }
 

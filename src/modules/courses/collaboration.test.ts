@@ -264,4 +264,17 @@ describe("Directory profiles", () => {
     expect(bare.body.profile).toBeNull();
     expect(bare.body.user.id).toBe(userIds.s2);
   });
+
+  it("gives a lecturer supervised projects and a student their own", async () => {
+    // The two lists are separate on purpose: the profile page picks which to
+    // show from the person's role, so a student is never offered a "Projects
+    // supervised" tab that can only be empty.
+    const lecturer = await request(app).get(`/profiles/${userIds.supA}`).set(as("s1")).expect(200);
+    expect(Array.isArray(lecturer.body.supervisedProjects)).toBe(true);
+    expect(lecturer.body.ownProjects).toEqual([]);
+
+    const student = await request(app).get(`/profiles/${userIds.s1}`).set(as("s1")).expect(200);
+    expect(student.body.supervisedProjects).toEqual([]);
+    expect(Array.isArray(student.body.ownProjects)).toBe(true);
+  });
 });
