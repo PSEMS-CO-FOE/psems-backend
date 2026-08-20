@@ -5,6 +5,7 @@ import { blockIfPasswordChangeRequired } from "../../middleware/forcePasswordCha
 import { requirePhase } from "../../middleware/phase";
 import { requireRole } from "../../middleware/role";
 import {
+  applyPresetSchema,
   assignEvaluatorSchema,
   createCpiSchema,
   decideSupervisorRequestSchema,
@@ -158,8 +159,18 @@ coursesRouter.post("/:cpiId/supervisor-requests/:requestId", ...coordinatorOnly,
   }
 });
 
-// Applies the Coordinator-Managed preset. No longer phase-gated: it only seeds
-// policy defaults now, and a coordinator may reach for it at any point.
+// Applies a named preset. Not phase-gated: it only seeds policy defaults, and a
+// coordinator may reach for one at any point.
+coursesRouter.post("/:cpiId/preset", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const { mode } = applyPresetSchema.parse(req.body);
+    return res.json(await courses.applyPreset(req.user!.user_id, req.params.cpiId, mode));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// The original single-preset route, kept so existing links do not break.
 coursesRouter.post("/:cpiId/coordinator-managed-preset", ...coordinatorOnly, async (req, res, next) => {
   try {
     return res.json(await courses.applyCoordinatorManagedPreset(req.user!.user_id, req.params.cpiId));

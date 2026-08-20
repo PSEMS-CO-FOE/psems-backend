@@ -393,16 +393,17 @@ export async function respondToSupervisorInvite(
   });
 }
 
-// Applies the Coordinator-Managed preset to the policy. No longer locks
-// anything and no longer refuses when supervisors exist — a coordinator-run
-// course may still have them; the preset just sets the coordinator as the one
-// who posts ideas and confirms selections. Individual settings stay editable.
-export async function applyCoordinatorManagedPreset(coordinatorUserId: string, cpiId: string) {
+// Applies a preset to the policy. A preset is a starting point, not a lock: it
+// writes only the handful of settings it has an opinion about, leaves every
+// other one untouched, and refuses nothing — a Coordinator-Managed course may
+// still run supervisors. Re-applying one later is how a coordinator resets an
+// area they have edited into a corner.
+export async function applyPreset(coordinatorUserId: string, cpiId: string, mode: CpiMode) {
   await loadOwnedCpi(coordinatorUserId, cpiId);
-  const preset = createPolicyData(CpiMode.COORDINATOR_MANAGED);
+  const preset = createPolicyData(mode);
 
   const [cpi] = await prisma.$transaction([
-    prisma.courseInstance.update({ where: { id: cpiId }, data: { mode: CpiMode.COORDINATOR_MANAGED } }),
+    prisma.courseInstance.update({ where: { id: cpiId }, data: { mode } }),
     prisma.cpiPolicy.upsert({
       where: { courseInstanceId: cpiId },
       update: preset,
@@ -411,6 +412,10 @@ export async function applyCoordinatorManagedPreset(coordinatorUserId: string, c
   ]);
 
   return cpi;
+}
+
+export function applyCoordinatorManagedPreset(coordinatorUserId: string, cpiId: string) {
+  return applyPreset(coordinatorUserId, cpiId, CpiMode.COORDINATOR_MANAGED);
 }
 
 export async function assignEvaluator(coordinatorUserId: string, cpiId: string, lecturerUserId: string) {

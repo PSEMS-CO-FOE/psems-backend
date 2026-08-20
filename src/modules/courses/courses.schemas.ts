@@ -25,6 +25,10 @@ export const setTimelineSchema = z.object({
   phases: z.array(timelinePhaseSchema).min(1).max(10),
 });
 
+// Re-applies a preset after creation. The mode is only a starting point, so
+// this overwrites the settings the preset covers and leaves the rest alone.
+export const applyPresetSchema = z.object({ mode: z.nativeEnum(CpiMode) });
+
 export const inviteSupervisorSchema = z.object({ lecturerUserId: z.string().uuid() });
 export const respondInviteSchema = z.object({ decision: z.enum(["ACCEPT", "DECLINE"]) });
 export const assignEvaluatorSchema = z.object({ lecturerUserId: z.string().uuid() });
