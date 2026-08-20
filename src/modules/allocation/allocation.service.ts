@@ -1,4 +1,4 @@
-import { AllocationSource, CourseInstance, SelectionStatus } from "@prisma/client";
+import { AllocationSource, CourseInstance, CpiPhase, SelectionStatus } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
@@ -8,6 +8,21 @@ import { getAcceptedSupervisorLecturerId } from "../shared/cpiMembership";
 function assertNotFinalized(cpi: CourseInstance) {
   if (cpi.allocationsFinalizedAt) {
     throw new AuthError(409, "Allocations are finalized and locked for this CPI");
+  }
+}
+
+// Pairings open with PROJECT_REGISTRATION and never close with it. A supervisor
+// goes on leave in week 10 and the group has to be moved; a route-level phase
+// gate made that a hard 403 long after the only legitimate moment had passed.
+// Same reasoning as scheduling, where the gate moved into the service for the
+// same reason. The finalize lock is the real protection here, not the calendar.
+async function assertAllocationOpen(cpiId: string) {
+  const window = await prisma.cpiTimeline.findUnique({
+    where: { courseInstanceId_phase: { courseInstanceId: cpiId, phase: CpiPhase.PROJECT_REGISTRATION } },
+  });
+  if (!window) throw new AuthError(403, "The project registration phase has not been scheduled for this CPI");
+  if (new Date() < window.startDate) {
+    throw new AuthError(403, `Allocation opens at ${window.startDate.toISOString()}`);
   }
 }
 
@@ -101,6 +116,7 @@ export async function overrideAllocation(
   supervisorUserId?: string,
 ) {
   const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
+  await assertAllocationOpen(cpiId);
   assertNotFinalized(cpi);
 
   const [group, idea] = await Promise.all([
@@ -137,6 +153,7 @@ export async function overrideAllocation(
 // via overrideAllocation does the same, so both paths satisfy finalize's gate.
 export async function confirmAllocation(coordinatorUserId: string, cpiId: string, groupId: string) {
   const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
+  await assertAllocationOpen(cpiId);
   assertNotFinalized(cpi);
   if (cpi.mode !== "COORDINATOR_MANAGED") {
     throw new AuthError(409, "Per-pairing confirmation applies only in Coordinator-Managed mode");
@@ -153,9 +170,46 @@ export async function confirmAllocation(coordinatorUserId: string, cpiId: string
   });
 }
 
+// Unlock allocations so a pairing can be changed after the fact. A supervisor
+// going on leave mid-semester is ordinary, and until this existed the only
+// answer was a 409 — the lock had no way out at all.
+//
+// The cut-off mirrors the evaluation reopen rule: finalizing is not the point of
+// no return, aggregation is. Once any mark exists for this course, the pairing
+// that produced it has to stand.
+export async function reopenAllocations(coordinatorUserId: string, cpiId: string, reason: string) {
+  const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
+  if (!cpi.allocationsFinalizedAt) {
+    throw new AuthError(409, "Allocations are not locked");
+  }
+
+  const aggregated = await prisma.finalMark.findFirst({
+    where: { group: { courseInstanceId: cpiId } },
+    select: { id: true },
+  });
+  if (aggregated) {
+    throw new AuthError(409, "Marks have been aggregated for this course — allocations can no longer be reopened");
+  }
+
+  // Conditional, so two coordinators clicking at once cannot both reopen.
+  const unlocked = await prisma.courseInstance.updateMany({
+    where: { id: cpiId, allocationsFinalizedAt: { not: null } },
+    data: { allocationsFinalizedAt: null },
+  });
+  if (unlocked.count === 0) {
+    throw new AuthError(409, "Allocations are not locked");
+  }
+
+  // The reason is kept on the audit trail the write middleware already records;
+  // nobody is notified here, because nothing has changed yet. Re-finalizing
+  // notifies every affected group and supervisor, as it always did.
+  return { id: cpiId, allocationsFinalizedAt: null, reason };
+}
+
 // Lock all allocations for the CPI (spec 3.3 Step 7: "all allocations locked").
 export async function finalizeAllocations(coordinatorUserId: string, cpiId: string) {
   const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
+  await assertAllocationOpen(cpiId);
   assertNotFinalized(cpi);
 
   // Coordinator-Managed requires every pairing to have been explicitly reviewed

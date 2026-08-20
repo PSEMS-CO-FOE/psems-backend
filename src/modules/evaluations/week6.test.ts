@@ -154,6 +154,74 @@ describe("Week 6: allocation finalize + override", () => {
   });
 });
 
+describe("Allocation reopen", () => {
+  it("unlocks a finalized allocation so a supervisor can be changed", async () => {
+    const { cpiId, groupId, supIdeaId } = await setupAcceptedCpi("Reopen CPI");
+    await openPhase(cpiId, CpiPhase.PROJECT_REGISTRATION);
+
+    await request(app).post(`/courses/${cpiId}/allocations/generate`).set(as("coord")).expect(201);
+    await request(app).post(`/courses/${cpiId}/allocations/finalize`).set(as("coord")).expect(200);
+    await request(app)
+      .put(`/courses/${cpiId}/allocations/${groupId}`)
+      .set(as("coord"))
+      .send({ ideaId: supIdeaId })
+      .expect(409);
+
+    // A reason is required — reopening a lock is a decision worth explaining.
+    await request(app).post(`/courses/${cpiId}/allocations/reopen`).set(as("coord")).send({}).expect(400);
+
+    const reopened = await request(app)
+      .post(`/courses/${cpiId}/allocations/reopen`)
+      .set(as("coord"))
+      .send({ reason: "Dr Alpha is on leave from week 10" })
+      .expect(200);
+    expect(reopened.body.allocationsFinalizedAt).toBeNull();
+
+    // The whole point: the pairing can now be changed.
+    const changed = await request(app)
+      .put(`/courses/${cpiId}/allocations/${groupId}`)
+      .set(as("coord"))
+      .send({ ideaId: supIdeaId, supervisorUserId: userIds.sup })
+      .expect(200);
+    expect(changed.body.source).toBe("COORDINATOR_OVERRIDE");
+
+    // Reopening something already open is a conflict, not a silent no-op.
+    await request(app)
+      .post(`/courses/${cpiId}/allocations/reopen`)
+      .set(as("coord"))
+      .send({ reason: "again" })
+      .expect(409);
+  });
+
+  it("still allows a pairing change after the registration phase has closed", async () => {
+    // A supervisor going on leave does not wait for the timeline. The route
+    // gate used to make this a hard 403 long after the phase had passed.
+    const { cpiId, groupId, supIdeaId } = await setupAcceptedCpi("Late change CPI");
+    await openPhase(cpiId, CpiPhase.PROJECT_REGISTRATION);
+    await request(app).post(`/courses/${cpiId}/allocations/generate`).set(as("coord")).expect(201);
+
+    await request(app)
+      .put(`/courses/${cpiId}/timeline`)
+      .set(as("coord"))
+      .send({
+        phases: [
+          {
+            phase: "PROJECT_REGISTRATION",
+            startDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+            endDate: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000).toISOString(),
+          },
+        ],
+      })
+      .expect(200);
+
+    await request(app)
+      .put(`/courses/${cpiId}/allocations/${groupId}`)
+      .set(as("coord"))
+      .send({ ideaId: supIdeaId, supervisorUserId: userIds.sup })
+      .expect(200);
+  });
+});
+
 describe("Week 6: evaluation config (4-stage rubric)", () => {
   it("accepts a valid 4-stage rubric, rejects bad weights, and assigns a stage evaluator", async () => {
     const { cpiId } = await setupAcceptedCpi("Rubric CPI");
