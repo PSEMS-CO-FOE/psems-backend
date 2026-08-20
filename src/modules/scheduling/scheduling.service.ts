@@ -1,4 +1,4 @@
-import { CpiPhase, InvitationStatus, PanelRole, Prisma } from "@prisma/client";
+import { CpiPhase, InvitationStatus, LecturerApprovalStatus, PanelRole, Prisma } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
@@ -444,7 +444,32 @@ export async function listSessions(userId: string, cpiId: string) {
       ).map((s) => s.evaluationStageId)
     : [];
 
-  if (seatedSessionIds.length === 0 && supervisedGroupIds.length === 0 && stageIds.length === 0) {
+  // Stages anyone may join — the FYP demo-day case, where every lecturer is
+  // invited and whoever turns up marks. Without this an approved lecturer who
+  // holds no seat got a 403 and could not even find the session to join, so the
+  // openToAll rule and the join endpoint were both unreachable. Only these
+  // sessions are exposed, never the rest of the timetable.
+  const openStageIds = (
+    await prisma.stagePanelRule.findMany({
+      where: { openToAll: true, stage: { courseInstanceId: cpiId } },
+      select: { evaluationStageId: true },
+    })
+  ).map((r) => r.evaluationStageId);
+
+  const isApprovedLecturer =
+    openStageIds.length > 0 &&
+    (await prisma.lecturer.findFirst({
+      where: { userId, approvalStatus: LecturerApprovalStatus.APPROVED },
+      select: { id: true },
+    })) !== null;
+  const joinableStageIds = isApprovedLecturer ? openStageIds : [];
+
+  if (
+    seatedSessionIds.length === 0 &&
+    supervisedGroupIds.length === 0 &&
+    stageIds.length === 0 &&
+    joinableStageIds.length === 0
+  ) {
     throw new AuthError(403, "You are not a participant in this CPI's evaluation");
   }
 
@@ -455,6 +480,7 @@ export async function listSessions(userId: string, cpiId: string) {
         { id: { in: seatedSessionIds } },
         { groupId: { in: supervisedGroupIds } },
         { evaluationStageId: { in: stageIds } },
+        { evaluationStageId: { in: joinableStageIds } },
       ],
     },
     include: sessionInclude,
