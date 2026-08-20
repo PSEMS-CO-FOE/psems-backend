@@ -45,6 +45,25 @@ Also confirmed by design, not bugs: submission deadlines are soft (late accepted
 
 ## Current phase
 
+**Role-derived profiles COMPLETE as of 2026-08-16 (uncommitted).** **102 tests / 15 suites green**, tsc + lint clean. No schema change.
+
+- **`getProfile` now returns `ownProjects` beside `supervisedProjects`.** `supervisedProjects` reads the `Lecturer` row, so it was always `[]` for a student — which is why the profile page could only ever show a student an empty "Projects supervised" tab. `ownProjects` derives a student’s projects from their accepted group memberships’ allocations, **stored nowhere**, the same rule as the supervised list, and names the supervisor rather than the group-mates.
+- Both lists are returned for everyone and are empty for the role they do not apply to, which is what lets the frontend hide a tab instead of rendering it blank.
+
+**Reachability pass COMPLETE as of 2026-08-16 (uncommitted).** A sweep of all 121 routes against every frontend call found nine features that were built, tested and reachable from no screen — and three that were broken end to end. **101 tests / 15 suites green**, tsc + lint clean.
+
+- **Walk-in marking was unreachable, not just unwired.** `listSessions` threw 403 to any lecturer who held no seat, was not a supervisor and was not a CPI evaluator — so a lecturer walking into an open FYP demo could not list the sessions, could not find a session id, and therefore could never reach `POST /panel/join`. `openToAll` and the join endpoint had both existed since Wave 1 with no way in. `listSessions` now also returns sessions whose stage carries an `openToAll` panel rule, **to approved lecturers only, and only those sessions** — widening visibility must not turn a timetable into a public document. Two tests: an outsider finds and joins an open stage (idempotently), and a course with no open stage still 403s.
+- **Allocations could be locked but never unlocked.** `overrideAllocation` 409s once `allocationsFinalizedAt` is set, and nothing cleared it — so a supervisor going on leave in week 10 could not be replaced at all, against an explicit requirement. `POST /allocations/reopen` takes a mandatory reason and is **refused once any `FinalMark` exists for the course**, mirroring the session reopen rule: finalizing is not the point of no return, aggregation is.
+- **The allocation phase gate moved into the service**, exactly as scheduling's did in Wave 3 and for the same reason. `PROJECT_REGISTRATION` opens pairing and no longer closes it; only `generate` (seeding from selections) stays strictly inside the phase. A route-level gate made a legitimate late change a hard 403 long after the only permitted moment had passed. The finalize lock is the real protection, not the calendar.
+- **Nothing else needed backend work.** The remaining gaps were all frontend — endpoints and hooks that existed with no screen. See `psems-frontend/CLAUDE.md`.
+- **No TODO or FIXME exists in either repo.**
+
+**Course settings restructure COMPLETE as of 2026-08-16 (uncommitted).** Backend half is small — one route — but it unblocked the frontend rebuild of the settings screen. **97 tests / 15 suites green**, tsc + lint clean.
+
+- **`POST /courses/:cpiId/preset` `{mode}`** applies either preset by name. `presetFor()` had always seeded a policy at creation, but there was **no way to re-apply one afterwards and only `COORDINATOR_MANAGED` had an endpoint** — a coordinator who edited their way into a corner had to undo it setting by setting. `applyCoordinatorManagedPreset` is now a one-line delegate and its old route is kept, so nothing that called it breaks.
+- **A preset writes only the five settings it has an opinion about.** Everything else is left exactly as the coordinator set it, and the tests assert that: an edited `requireOverallComment` and `maxIdeasPerGroup` survive switching preset in both directions. Re-applying a preset that silently reverted unrelated work would make the button unusable.
+- **No new policy fields.** `updatePolicySchema` already accepted all 24; six of them simply had no control in the UI. That was a frontend gap, not a backend one — see `psems-frontend/CLAUDE.md`.
+
 **Restructure Wave 4 COMPLETE as of 2026-08-16 (uncommitted).** Per-student marks, grade bands, per-stage publishing and the CA sheet. One migration (`student_marks_grades_and_publication`), written by hand so the 3 courses that had already published kept that fact — each became a course-wide `mark_publications` row before `marks_published_at` was dropped. **This is the last wave; the restructure is done.**
 
 - **`StudentMark`** (unique per student and stage) sits alongside `FinalMark`. GROUP criteria give every member the same share of the stage; INDIVIDUAL criteria give each member their own. The two halves are stored separately (`groupComponentPercent` / `individualComponentPercent`) so a student can see which part of a mark was the group's work.
@@ -55,7 +74,7 @@ Also confirmed by design, not bugs: submission deadlines are soft (late accepted
 - **A student pre-publish now gets 200, not 403.** Per-stage publishing means "published" is no longer one yes/no — a 403 cannot say "the proposal is out but the demo is not". `getMarks` returns the visible stages plus `pendingStages` naming the rest. **This is a deliberate breaking change to the Week 8 contract**; the frontend no longer treats 403 as an empty state.
 - **A student sees only their own breakdown**, never a group-mate's individual marks, even though both hang off the same group.
 - **The CA sheet** (`GET /marks/sheet`, coordinator only) is one row per student with a weight row summing to 1.00, one column per stage, a total, and **zero totals flagged rather than dropped** — a zero usually means someone was never scored. Names are stored as one field, so the sheet takes the last word as the surname and initials from the rest; the full name is sent too.
-- **`registrationNumber` is still unpopulated.** The column exists and the sheet has a place for it, but the student CSV does not carry it yet, so it prints as a dash. Provisioning change, not a marks change.
+- ~~**`registrationNumber` is still unpopulated.**~~ **Closed 2026-08-16** — the student CSV now carries it (`email,fullName,studentId,registrationNumber,department,year`, the column optional so older files still load), so the sheet’s second column fills in.
 - **Sessions now carry their group's accepted members** so a panelist can score per-student criteria without a request per session.
 - `week8.test.ts` renamed **`marks.test.ts`** and rewritten onto the shared harness, covering individual marks, publishing and unpublishing, comments without marks, grades, and the sheet.
 
