@@ -86,8 +86,13 @@ export async function refreshSession(refreshTokenJti: string) {
 
   const accessToken = signAccessToken({ user_id: user.id, role: user.role, email: user.email });
   const newRefreshToken = await issueRefreshToken(user.id);
-
-  return { accessToken, refreshToken: newRefreshToken };
+.
+  return {
+    accessToken,
+    refreshToken: newRefreshToken,
+    forcePasswordChange: user.forcePasswordChange,
+    user: { id: user.id, email: user.email, role: user.role },
+  };
 }
 
 export async function logout(refreshTokenJti: string) {
