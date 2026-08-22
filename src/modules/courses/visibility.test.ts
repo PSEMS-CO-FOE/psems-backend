@@ -9,7 +9,9 @@ import { createHarness } from "../shared/testing/harness";
 const h = createHarness("visibility.");
 const { as, makeUser, login, openPhase, cleanup } = h;
 
-const DEPARTMENT = "CE";
+const DEPARTMENT = "CE-VIS";
+const BATCH = "VIS22ENG";
+const PAST_BATCH = "VIS21ENG";
 
 async function makeCourse(opts: { batch: string; name?: string; publish?: boolean }) {
   const create = await request(app)
@@ -34,12 +36,21 @@ async function makeCourse(opts: { batch: string; name?: string; publish?: boolea
 
 const listFor = (key: string) => request(app).get("/courses/mine/student").set(as(key));
 
+interface RosterBody {
+  rows: { indexNumber: string; working: string; offTarget: boolean }[];
+}
+
+// By index number, not by position — ordering should never decide a result.
+function rowFor(roster: RosterBody, key: string) {
+  return roster.rows.find((r) => r.indexNumber === `${h.prefix}${key}`)!;
+}
+
 beforeAll(async () => {
   await cleanup();
   await makeUser("coord", Role.COURSE_COORDINATOR);
   // s22 is in the current batch; s21 is a year older and repeating.
-  await makeUser("s22", Role.STUDENT, { student: true, batch: "22ENG", department: DEPARTMENT });
-  await makeUser("s21", Role.STUDENT, { student: true, batch: "21ENG", department: DEPARTMENT });
+  await makeUser("s22", Role.STUDENT, { student: true, batch: BATCH, department: DEPARTMENT });
+  await makeUser("s21", Role.STUDENT, { student: true, batch: PAST_BATCH, department: DEPARTMENT });
   for (const k of ["coord", "s22", "s21"]) await login(k);
 });
 
@@ -53,17 +64,17 @@ afterAll(async () => {
 
 describe("Course discovery", () => {
   it("shows a student their own batch's active courses and not another batch's", async () => {
-    const mine = await makeCourse({ batch: "22ENG", name: "DMP 22ENG", publish: true });
-    await makeCourse({ batch: "21ENG", name: "DMP 21ENG", publish: true });
+    const mine = await makeCourse({ batch: BATCH, name: "DMP 22ENG", publish: true });
+    await makeCourse({ batch: PAST_BATCH, name: "DMP 21ENG", publish: true });
 
     const list = await listFor("s22").expect(200);
     const ids = list.body.map((c: { id: string }) => c.id);
     expect(ids).toContain(mine);
-    expect(list.body.every((c: { batch: string }) => c.batch === "22ENG")).toBe(true);
+    expect(list.body.every((c: { batch: string }) => c.batch === BATCH)).toBe(true);
   });
 
   it("hides a draft course from students and keeps it for its coordinator", async () => {
-    const draft = await makeCourse({ batch: "22ENG", name: "Not ready" });
+    const draft = await makeCourse({ batch: BATCH, name: "Not ready" });
 
     const list = await listFor("s22").expect(200);
     expect(list.body.map((c: { id: string }) => c.id)).not.toContain(draft);
@@ -74,7 +85,7 @@ describe("Course discovery", () => {
   });
 
   it("keeps a course visible to a student who joined it, after it is archived", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "Finished", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "Finished", publish: true });
     await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);
     await request(app).post(`/courses/${cpiId}/groups/solo`).set(as("s22")).expect(201);
 
@@ -87,10 +98,10 @@ describe("Course discovery", () => {
   });
 
   it("treats batches differing only by case or spacing as the same batch", async () => {
-    const cpiId = await makeCourse({ batch: " 22eng ", name: "Sloppy batch", publish: true });
+    const cpiId = await makeCourse({ batch: " vis22eng ", name: "Sloppy batch", publish: true });
 
     const stored = await prisma.courseInstance.findUnique({ where: { id: cpiId }, select: { batch: true } });
-    expect(stored?.batch).toBe("22ENG");
+    expect(stored?.batch).toBe(BATCH);
 
     const list = await listFor("s22").expect(200);
     expect(list.body.map((c: { id: string }) => c.id)).toContain(cpiId);
@@ -113,7 +124,7 @@ describe("Course discovery", () => {
 
 describe("Joining another batch's course", () => {
   it("lets a repeated student ask, and shows the course once approved", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "Retake target", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "Retake target", publish: true });
 
     // Not visible to the older student to begin with.
     expect((await listFor("s21")).body.map((c: { id: string }) => c.id)).not.toContain(cpiId);
@@ -133,7 +144,7 @@ describe("Joining another batch's course", () => {
 
     const queue = await request(app).get(`/courses/${cpiId}/join-requests`).set(as("coord")).expect(200);
     expect(queue.body).toHaveLength(1);
-    expect(queue.body[0].student.batch).toBe("21ENG");
+    expect(queue.body[0].student.batch).toBe(PAST_BATCH);
 
     await request(app)
       .post(`/courses/${cpiId}/join-requests/${asked.body.id}`)
@@ -145,7 +156,7 @@ describe("Joining another batch's course", () => {
   });
 
   it("does not grant access on a rejected request", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "Declined", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "Declined", publish: true });
     const asked = await request(app)
       .post(`/courses/${cpiId}/join-requests`)
       .set(as("s21"))
@@ -162,7 +173,7 @@ describe("Joining another batch's course", () => {
   });
 
   it("refuses a request for the student's own batch", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "Already mine", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "Already mine", publish: true });
     await request(app)
       .post(`/courses/${cpiId}/join-requests`)
       .set(as("s22"))
@@ -171,7 +182,7 @@ describe("Joining another batch's course", () => {
   });
 
   it("lets an approved student start after registration has closed, and no one else", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "Late start", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "Late start", publish: true });
     const asked = await request(app)
       .post(`/courses/${cpiId}/join-requests`)
       .set(as("s21"))
@@ -195,7 +206,7 @@ describe("Joining another batch's course", () => {
   });
 
   it("lets an approved student reach selection too, but not the submission window", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "Late selection", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "Late selection", publish: true });
     const asked = await request(app)
       .post(`/courses/${cpiId}/join-requests`)
       .set(as("s21"))
@@ -231,7 +242,7 @@ describe("Joining another batch's course", () => {
 
 describe("Group size", () => {
   it("accepts a group that is over or under the target, and flags it", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "Odd sizes", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "Odd sizes", publish: true });
     await request(app)
       .patch(`/courses/${cpiId}/policy`)
       .set(as("coord"))
@@ -245,41 +256,41 @@ describe("Group size", () => {
 
     const roster = await request(app).get(`/courses/${cpiId}/roster`).set(as("coord")).expect(200);
     expect(roster.body.targetGroupSize).toBe(4);
-    expect(roster.body.rows[0].offTarget).toBe(true);
+    expect(rowFor(roster.body, "s22").offTarget).toBe(true);
     expect(roster.body.alone).toBe(1);
   });
 });
 
 describe("The course roster", () => {
   it("lists every student in the batch, including those who have not started", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "Roster", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "Roster", publish: true });
     await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);
     await request(app).post(`/courses/${cpiId}/groups/solo`).set(as("s22")).expect(201);
 
     const roster = await request(app).get(`/courses/${cpiId}/roster`).set(as("coord")).expect(200);
-    expect(roster.body.batch).toBe("22ENG");
+    expect(roster.body.batch).toBe(BATCH);
     // s22 is the only student in this batch, and they are working alone.
     expect(roster.body.total).toBe(1);
     expect(roster.body.alone).toBe(1);
     expect(roster.body.notStarted).toBe(0);
-    expect(roster.body.rows[0].indexNumber).toBe(`${h.prefix}s22`);
+    expect(rowFor(roster.body, "s22").working).toBe("ALONE");
   });
 
   it("counts a student who never started", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "Nobody started", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "Nobody started", publish: true });
     const roster = await request(app).get(`/courses/${cpiId}/roster`).set(as("coord")).expect(200);
     expect(roster.body.notStarted).toBe(1);
-    expect(roster.body.rows[0].working).toBe("NOT_STARTED");
+    expect(rowFor(roster.body, "s22").working).toBe("NOT_STARTED");
   });
 
   it("shows nobody when the batch is wrong, which is how a typo is caught", async () => {
-    const cpiId = await makeCourse({ batch: "23ENG", name: "Mistyped", publish: true });
+    const cpiId = await makeCourse({ batch: "VIS23ENG", name: "Mistyped", publish: true });
     const roster = await request(app).get(`/courses/${cpiId}/roster`).set(as("coord")).expect(200);
     expect(roster.body.total).toBe(0);
   });
 
   it("includes an approved late joiner even though their batch differs", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "With a repeat", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "With a repeat", publish: true });
     const asked = await request(app)
       .post(`/courses/${cpiId}/join-requests`)
       .set(as("s21"))
@@ -297,7 +308,7 @@ describe("The course roster", () => {
   });
 
   it("is coordinator-only", async () => {
-    const cpiId = await makeCourse({ batch: "22ENG", name: "Private", publish: true });
+    const cpiId = await makeCourse({ batch: BATCH, name: "Private", publish: true });
     await request(app).get(`/courses/${cpiId}/roster`).set(as("s22")).expect(403);
   });
 });
