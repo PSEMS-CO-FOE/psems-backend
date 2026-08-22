@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // The spec's 7 permission roles plus LECTURER: an approved lecturer who has
@@ -102,6 +103,24 @@ enum PanelScoreVisibility {
 enum CriterionLevel {
   GROUP
   INDIVIDUAL
+}
+
+// Where a course is in its life. DRAFT is invisible to students so a course can
+// be set up in peace; ARCHIVED is how a finished course stays readable to the
+// students who took it without appearing to anyone else.
+enum CourseStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+// A student asking to take a course belonging to another batch — the repeat
+// case. Mirrors SupervisorRequest rather than reusing InvitationStatus, which is
+// shared with group membership.
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 // Whether students take part as groups or individually (spec 3.3 Step 1).
@@ -255,6 +274,7 @@ model User {
   guestsInvited        GuestPanelist[]       @relation("GuestInvitedBy")
   sessionReviews       SessionReview[]       @relation("SessionReviewer")
   markPublications     MarkPublication[]     @relation("MarksPublishedBy")
+  joinRequestDecisions CourseJoinRequest[]   @relation("JoinRequestDecidedBy")
   pooledShareDecisions PooledShareDecision[] @relation("PooledShareDecidedBy")
   profile              UserProfile?
   supervisorDecisions  SupervisorRequest[]   @relation("SupervisorRequestDecidedBy")
@@ -270,16 +290,21 @@ model Student {
   // Distinct from studentId: mark sheets carry both an index number and a
   // registration number. Nullable — older records have only the index.
   registrationNumber String? @unique @map("registration_number")
+  // The intake the student belongs to, e.g. 22ENG. Fixed for life, unlike year
+  // of study, and it is what decides which courses they can see.
+  batch              String
   department         String
   year               Int
   provisioningStatus String  @default("ACTIVE") @map("provisioning_status")
 
-  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  ledGroups        Group[]       @relation("GroupLeader")
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledGroups        Group[]             @relation("GroupLeader")
   groupMemberships GroupMember[]
   rubricScores     RubricScore[]
   studentMarks     StudentMark[]
+  joinRequests     CourseJoinRequest[]
 
+  @@index([batch])
   @@map("students")
 }
 
@@ -316,7 +341,10 @@ model CourseInstance {
 
   participationMode      CpiParticipationMode @map("participation_mode")
   department             String
+  // The intake this course is run for. With department, this is who sees it.
+  batch                  String
   academicYear           String               @map("academic_year")
+  status                 CourseStatus         @default(DRAFT)
   mode                   CpiMode?
   allocationsFinalizedAt DateTime?            @map("allocations_finalized_at")
   createdById            String               @map("created_by_id")
@@ -343,7 +371,9 @@ model CourseInstance {
   studentMarks         StudentMark[]
   gradeBands           GradeBand[]
   markPublications     MarkPublication[]
+  joinRequests         CourseJoinRequest[]
 
+  @@index([department, batch])
   @@map("course_instances")
 }
 
@@ -375,8 +405,13 @@ model CpiPolicy {
   allowSupervisorSelfRequest        Boolean            @default(true) @map("allow_supervisor_self_request")
   selectionConfirmedBy              SelectionConfirmer @default(SUPERVISOR) @map("selection_confirmed_by")
 
-  // Participation shape.
-  allowIndividualParticipation Boolean @default(false) @map("allow_individual_participation")
+  // Participation shape. Working alone is allowed by default even on a group
+  // course: a batch rarely divides evenly, and a student left over must still be
+  // able to proceed.
+  allowIndividualParticipation Boolean @default(true) @map("allow_individual_participation")
+  // The group size the coordinator wants. Advisory only — a group over or under
+  // it is flagged on the roster, never refused.
+  targetGroupSize              Int?    @map("target_group_size")
   autoCreateSoloGroup          Boolean @default(true) @map("auto_create_solo_group")
 
   // Evaluation.
@@ -385,6 +420,10 @@ model CpiPolicy {
   availabilityRequiredFrom AvailabilityRequirement @default(EVALUATORS_ONLY) @map("availability_required_from")
 
   // Results.
+  // Below this a student is repeated. Read only by the coordinator's own views —
+  // PSEMS never tells a student they have been repeated, because that decision
+  // belongs to the department.
+  passMarkPercent       Float?  @map("pass_mark_percent")
   gradingEnabled        Boolean @default(false) @map("grading_enabled")
   caContributionPercent Float?  @map("ca_contribution_percent")
 
@@ -609,6 +648,33 @@ model SupervisorRequest {
 // Institution-wide directory profile. Visible to any logged-in user; guests
 // authenticating with a scoring link are deliberately excluded, since their
 // access is scoped to the sessions they mark.
+// A student asking to take a course that belongs to another batch — a repeat.
+// Approving it IS the access: there is no separate grant, and discovery reads
+// this table directly.
+//
+// An approved request also lets that student form a group and select a project
+// after those phases have closed, because a repeat is decided once the previous
+// course has finished and its marks are out — by which time the new course has
+// usually moved on.
+model CourseJoinRequest {
+  id               String            @id @default(uuid())
+  courseInstanceId String            @map("course_instance_id")
+  studentId        String            @map("student_id")
+  reason           String
+  status           JoinRequestStatus @default(PENDING)
+  decidedById      String?           @map("decided_by_id")
+  decidedAt        DateTime?         @map("decided_at")
+  createdAt        DateTime          @default(now()) @map("created_at")
+
+  courseInstance CourseInstance @relation(fields: [courseInstanceId], references: [id], onDelete: Cascade)
+  student        Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  decidedBy      User?          @relation("JoinRequestDecidedBy", fields: [decidedById], references: [id])
+
+  @@unique([courseInstanceId, studentId])
+  @@index([courseInstanceId])
+  @@map("course_join_requests")
+}
+
 model UserProfile {
   id           String   @id @default(uuid())
   userId       String   @unique @map("user_id")

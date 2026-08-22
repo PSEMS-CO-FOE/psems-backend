@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { changePasswordSchema, loginSchema } from "./auth.schemas";
 import * as authService from "./auth.service";
-import { REFRESH_COOKIE_MAX_AGE_MS, REFRESH_COOKIE_NAME } from "./tokens";
+import { REFRESH_COOKIE_MAX_AGE_MS, REFRESH_COOKIE_NAME, refreshCookieOptions } from "./tokens";
 
 export const authRouter = Router();
 
@@ -12,9 +12,7 @@ authRouter.post("/login", async (req, res, next) => {
     const result = await authService.login(email, password);
 
     res.cookie(REFRESH_COOKIE_NAME, result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      ...refreshCookieOptions,
       maxAge: REFRESH_COOKIE_MAX_AGE_MS,
     });
 
@@ -48,9 +46,7 @@ authRouter.post("/refresh", async (req, res, next) => {
     const result = await authService.refreshSession(jti);
 
     res.cookie(REFRESH_COOKIE_NAME, result.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
+      ...refreshCookieOptions,
       maxAge: REFRESH_COOKIE_MAX_AGE_MS,
     });
 
@@ -66,7 +62,7 @@ authRouter.post("/logout", async (req, res, next) => {
     if (jti) {
       await authService.logout(jti);
     }
-    res.clearCookie(REFRESH_COOKIE_NAME);
+    res.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions);
     res.json({ message: "Logged out" });
   } catch (err) {
     return next(err);
