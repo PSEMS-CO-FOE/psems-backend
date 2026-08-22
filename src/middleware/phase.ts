@@ -1,6 +1,7 @@
 import { CpiPhase } from "@prisma/client";
 import { NextFunction, Request, Response } from "express";
 import { prisma } from "../config/database";
+import { LATE_JOINER_PHASES } from "../modules/courses/batch";
 
 // Gates an action to its CPI phase window (spec 3.3 Step 2) — a time gate,
 // separate from RBAC (who) and CPI ownership (whose CPI). Reads the CPI id from
@@ -10,6 +11,16 @@ export function requirePhase(phase: CpiPhase, cpiIdParam = "cpiId") {
     const cpiId = req.params[cpiIdParam];
     if (!cpiId) {
       return res.status(400).json({ error: `Missing ${cpiIdParam} in route` });
+    }
+
+    // A student approved to join a later batch's course arrives after the
+    // previous course finished and its marks came out, so this course has
+    // usually moved past registration and selection. The approval carries a
+    // reason, a decision and a timestamp — it is the authorisation to act
+    // outside those two windows, and without this the approval would only
+    // reveal a course they still could not do anything in.
+    if (LATE_JOINER_PHASES.includes(phase) && req.user && (await isApprovedLateJoiner(req.user.user_id, cpiId))) {
+      return next();
     }
 
     const window = await prisma.cpiTimeline.findUnique({
@@ -39,4 +50,15 @@ export function requirePhase(phase: CpiPhase, cpiIdParam = "cpiId") {
 
     return next();
   };
+}
+
+async function isApprovedLateJoiner(userId: string, cpiId: string): Promise<boolean> {
+  const student = await prisma.student.findUnique({ where: { userId }, select: { id: true } });
+  if (!student) return false;
+
+  const approval = await prisma.courseJoinRequest.findUnique({
+    where: { courseInstanceId_studentId: { courseInstanceId: cpiId, studentId: student.id } },
+    select: { status: true },
+  });
+  return approval?.status === "APPROVED";
 }

@@ -3,6 +3,7 @@ import { parse } from "csv-parse/sync";
 import crypto from "crypto";
 import { Prisma, Role } from "@prisma/client";
 import { prisma } from "../../config/database";
+import { normalizeBatch } from "../courses/batch";
 import { emailQueue } from "../../jobs/emailQueue";
 import { assertRole } from "../shared/authorization";
 import { csvStudentRowSchema, CsvStudentRow } from "./students.schemas";
@@ -46,27 +47,44 @@ export async function bulkProvisionStudents(
   // students instead of failing the batch.
   const emails = valid.map((v) => v.data.email);
   const studentIds = valid.map((v) => v.data.studentId);
-  const [existingUsers, existingStudents] = await Promise.all([
+  const registrationNumbers = valid
+    .map((v) => v.data.registrationNumber)
+    .filter((value): value is string => Boolean(value));
+  const [existingUsers, existingStudents, existingRegistrations] = await Promise.all([
     prisma.user.findMany({ where: { email: { in: emails } }, select: { email: true } }),
     prisma.student.findMany({ where: { studentId: { in: studentIds } }, select: { studentId: true } }),
+    prisma.student.findMany({
+      where: { registrationNumber: { in: registrationNumbers } },
+      select: { registrationNumber: true },
+    }),
   ]);
   const existingEmailSet = new Set(existingUsers.map((u) => u.email));
   const existingStudentIdSet = new Set(existingStudents.map((s) => s.studentId));
+  const existingRegistrationSet = new Set(
+    existingRegistrations.map((s) => s.registrationNumber).filter((value): value is string => Boolean(value)),
+  );
 
   const skipped: BulkProvisionResult["skipped"] = [];
   const seenInFile = new Set<string>();
   const toCreate: { row: number; data: CsvStudentRow }[] = [];
   for (const entry of valid) {
-    const { email, studentId } = entry.data;
+    const { email, studentId, registrationNumber } = entry.data;
+    // registrationNumber is unique too, and the creates run in one transaction,
+    // so a single repeat would otherwise fail the whole upload.
     if (existingEmailSet.has(email)) {
       skipped.push({ row: entry.row, email, reason: "email already has an account" });
     } else if (existingStudentIdSet.has(studentId)) {
       skipped.push({ row: entry.row, email, reason: `studentId ${studentId} already exists` });
+    } else if (registrationNumber && existingRegistrationSet.has(registrationNumber)) {
+      skipped.push({ row: entry.row, email, reason: `registrationNumber ${registrationNumber} already exists` });
     } else if (seenInFile.has(email) || seenInFile.has(studentId)) {
       skipped.push({ row: entry.row, email, reason: "duplicate row within this file" });
+    } else if (registrationNumber && seenInFile.has(registrationNumber)) {
+      skipped.push({ row: entry.row, email, reason: "duplicate registrationNumber within this file" });
     } else {
       seenInFile.add(email);
       seenInFile.add(studentId);
+      if (registrationNumber) seenInFile.add(registrationNumber);
       toCreate.push(entry);
     }
   }
@@ -93,6 +111,8 @@ export async function bulkProvisionStudents(
         student: {
           create: {
             studentId: data.studentId,
+            registrationNumber: data.registrationNumber,
+            batch: normalizeBatch(data.batch),
             department: data.department,
             year: data.year,
           },

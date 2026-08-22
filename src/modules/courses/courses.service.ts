@@ -1,5 +1,6 @@
 import {
   CourseInstance,
+  CourseStatus,
   CpiMode,
   CpiPhase,
   InvitationStatus,
@@ -7,9 +8,10 @@ import {
   Role,
 } from "@prisma/client";
 import { prisma } from "../../config/database";
+import { accessibleCourseFilter, normalizeBatch } from "./batch";
 import { AuthError } from "../auth/auth.service";
 import { assertRole } from "../shared/authorization";
-import { notify } from "../notifications/notifications.service";
+import { notify, notifyMany } from "../notifications/notifications.service";
 import { createPolicyData } from "../policy/policy.service";
 import { loadPolicy } from "../shared/cpiMembership";
 import { CreateCpiInput, SetTimelineInput } from "./courses.schemas";
@@ -39,6 +41,7 @@ export async function createCpi(coordinatorUserId: string, input: CreateCpiInput
       projectType: input.projectType,
       participationMode: input.participationMode,
       department: input.department,
+      batch: normalizeBatch(input.batch),
       academicYear: input.academicYear,
       mode: input.mode ?? null,
       createdById: coordinatorUserId,
@@ -161,11 +164,14 @@ export async function listOpenCpis(userId: string) {
   const excluded = new Set(already.map((a) => a.courseInstanceId));
 
   const cpis = await prisma.courseInstance.findMany({
-    where: { id: { notIn: [...excluded] } },
+    // Drafts are still being set up; a request against one is noise for the
+    // coordinator, and an archived course has already finished.
+    where: { id: { notIn: [...excluded] }, status: CourseStatus.ACTIVE },
     select: {
       id: true,
       name: true,
       department: true,
+      batch: true,
       academicYear: true,
       projectType: true,
       createdBy: { select: { fullName: true, email: true } },
@@ -287,30 +293,181 @@ export async function decideSupervisorRequest(
   return decided;
 }
 
-// CPIs a student can open: those in their department, plus any they've joined.
+// Courses a student can open: their own batch's active ones, everything they
+// have already joined, and anything they were approved to join late.
+//
+// Matching on department alone used to show every student every course the
+// department had ever run, including drafts still being set up.
 export async function listStudentCpis(userId: string) {
   const student = await prisma.student.findUnique({ where: { userId } });
   if (!student) return [];
 
-  const memberships = await prisma.groupMember.findMany({
-    where: { studentId: student.id },
-    select: { group: { select: { courseInstanceId: true } } },
-  });
-  const membershipCpiIds = memberships.map((m) => m.group.courseInstanceId);
-
   return prisma.courseInstance.findMany({
-    where: {
-      OR: [{ department: student.department }, { id: { in: membershipCpiIds } }],
-    },
+    where: await accessibleCourseFilter(student.id, student.batch, student.department),
     select: {
       id: true,
       name: true,
       department: true,
+      batch: true,
+      status: true,
       academicYear: true,
       projectType: true,
     },
     orderBy: { createdAt: "desc" },
   });
+}
+
+// Active courses in the student's department belonging to OTHER batches, so a
+// repeated student can name the one they want to join. Metadata only — never
+// contents — the same boundary `listOpenCpis` draws for lecturers.
+export async function listOtherBatchCpis(userId: string) {
+  const student = await prisma.student.findUnique({ where: { userId } });
+  if (!student) return [];
+
+  const requests = await prisma.courseJoinRequest.findMany({
+    where: { studentId: student.id },
+    select: { courseInstanceId: true, status: true, reason: true },
+  });
+  const byId = new Map(requests.map((r) => [r.courseInstanceId, r]));
+
+  const courses = await prisma.courseInstance.findMany({
+    where: {
+      status: CourseStatus.ACTIVE,
+      department: student.department,
+      batch: { not: student.batch },
+    },
+    select: { id: true, name: true, batch: true, projectType: true, academicYear: true },
+    orderBy: { createdAt: "desc" },
+  });
+
+  return courses.map((course) => ({ ...course, request: byId.get(course.id) ?? null }));
+}
+
+// Move a course between draft, active and archived. Drafts are invisible to
+// students, which is what lets a coordinator build one in peace; archiving takes
+// a finished course out of everyone's list except the students who took it.
+export async function setCourseStatus(coordinatorUserId: string, cpiId: string, status: CourseStatus) {
+  await loadOwnedCpi(coordinatorUserId, cpiId);
+
+  const updated = await prisma.courseInstance.update({
+    where: { id: cpiId },
+    data: { status },
+    select: { id: true, name: true, status: true, batch: true, department: true },
+  });
+
+  // Students only learn a course exists when it is published, so that is the
+  // moment worth telling them about.
+  if (status === CourseStatus.ACTIVE) {
+    const students = await prisma.student.findMany({
+      where: { batch: updated.batch, department: updated.department },
+      select: { userId: true },
+    });
+    await notifyMany(
+      students.map((s) => s.userId),
+      {
+        type: "COURSE_PUBLISHED",
+        title: "A course is open",
+        body: `"${updated.name}" is now open for ${updated.batch}.`,
+        courseInstanceId: cpiId,
+      },
+    );
+  }
+
+  return updated;
+}
+
+// Everyone the course is for, and what they are doing. The admin uploads the
+// batch, so the system knows all of them — but until now the coordinator could
+// only see the groups that happened to exist, and a student who never started
+// was invisible to allocation, sessions and marks alike.
+export async function getCourseRoster(coordinatorUserId: string, cpiId: string) {
+  const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
+  const policy = await prisma.cpiPolicy.findUnique({ where: { courseInstanceId: cpiId } });
+
+  const [students, memberships, approvals] = await Promise.all([
+    prisma.student.findMany({
+      where: { batch: cpi.batch, department: cpi.department },
+      select: { id: true, studentId: true, user: { select: { fullName: true, email: true } } },
+      orderBy: { studentId: "asc" },
+    }),
+    prisma.groupMember.findMany({
+      where: { status: InvitationStatus.ACCEPTED, group: { courseInstanceId: cpiId } },
+      select: {
+        studentId: true,
+        group: { select: { id: true, name: true, _count: { select: { members: true } } } },
+      },
+    }),
+    prisma.courseJoinRequest.findMany({
+      where: { courseInstanceId: cpiId, status: "APPROVED" },
+      select: {
+        student: {
+          select: { id: true, studentId: true, user: { select: { fullName: true, email: true } } },
+        },
+      },
+    }),
+  ]);
+
+  // Approved late joiners belong on the roster even though their batch differs.
+  const roll = [...students];
+  for (const approval of approvals) {
+    if (!roll.some((s) => s.id === approval.student.id)) roll.push(approval.student);
+  }
+
+  const byStudent = new Map(memberships.map((m) => [m.studentId, m.group]));
+  const target = policy?.targetGroupSize ?? null;
+
+  const rows = roll.map((student) => {
+    const group = byStudent.get(student.id) ?? null;
+    const size = group?._count.members ?? 0;
+    return {
+      studentId: student.id,
+      indexNumber: student.studentId,
+      name: student.user.fullName || student.user.email,
+      group: group ? { id: group.id, name: group.name, size } : null,
+      // A group of one on a group course is someone working alone, which is
+      // allowed and worth telling apart from not having started.
+      working: group ? (size === 1 ? "ALONE" : "IN_GROUP") : "NOT_STARTED",
+      // Advisory: the batch rarely divides evenly, so this is flagged, never refused.
+      offTarget: group !== null && target !== null && size !== target,
+    };
+  });
+
+  return {
+    batch: cpi.batch,
+    targetGroupSize: target,
+    total: rows.length,
+    inGroups: rows.filter((r) => r.working === "IN_GROUP").length,
+    alone: rows.filter((r) => r.working === "ALONE").length,
+    notStarted: rows.filter((r) => r.working === "NOT_STARTED").length,
+    rows,
+  };
+}
+
+// The batches this department has used, so the create form can suggest them
+// rather than relying on a coordinator typing the same code the same way twice.
+export async function listDepartmentBatches(coordinatorUserId: string) {
+  await assertRole(coordinatorUserId, Role.COURSE_COORDINATOR);
+  const courses = await prisma.courseInstance.findMany({
+    where: { createdById: coordinatorUserId },
+    select: { department: true },
+    distinct: ["department"],
+  });
+  const departments = courses.map((c) => c.department);
+
+  const [fromCourses, fromStudents] = await Promise.all([
+    prisma.courseInstance.findMany({
+      where: { department: { in: departments } },
+      select: { batch: true },
+      distinct: ["batch"],
+    }),
+    prisma.student.findMany({
+      where: { department: { in: departments } },
+      select: { batch: true },
+      distinct: ["batch"],
+    }),
+  ]);
+
+  return [...new Set([...fromCourses, ...fromStudents].map((r) => r.batch))].sort();
 }
 
 // CPIs a lecturer can open (accepted supervisor and/or evaluator/Head Judge),
@@ -393,16 +550,17 @@ export async function respondToSupervisorInvite(
   });
 }
 
-// Applies the Coordinator-Managed preset to the policy. No longer locks
-// anything and no longer refuses when supervisors exist — a coordinator-run
-// course may still have them; the preset just sets the coordinator as the one
-// who posts ideas and confirms selections. Individual settings stay editable.
-export async function applyCoordinatorManagedPreset(coordinatorUserId: string, cpiId: string) {
+// Applies a preset to the policy. A preset is a starting point, not a lock: it
+// writes only the handful of settings it has an opinion about, leaves every
+// other one untouched, and refuses nothing — a Coordinator-Managed course may
+// still run supervisors. Re-applying one later is how a coordinator resets an
+// area they have edited into a corner.
+export async function applyPreset(coordinatorUserId: string, cpiId: string, mode: CpiMode) {
   await loadOwnedCpi(coordinatorUserId, cpiId);
-  const preset = createPolicyData(CpiMode.COORDINATOR_MANAGED);
+  const preset = createPolicyData(mode);
 
   const [cpi] = await prisma.$transaction([
-    prisma.courseInstance.update({ where: { id: cpiId }, data: { mode: CpiMode.COORDINATOR_MANAGED } }),
+    prisma.courseInstance.update({ where: { id: cpiId }, data: { mode } }),
     prisma.cpiPolicy.upsert({
       where: { courseInstanceId: cpiId },
       update: preset,
@@ -411,6 +569,10 @@ export async function applyCoordinatorManagedPreset(coordinatorUserId: string, c
   ]);
 
   return cpi;
+}
+
+export function applyCoordinatorManagedPreset(coordinatorUserId: string, cpiId: string) {
+  return applyPreset(coordinatorUserId, cpiId, CpiMode.COORDINATOR_MANAGED);
 }
 
 export async function assignEvaluator(coordinatorUserId: string, cpiId: string, lecturerUserId: string) {

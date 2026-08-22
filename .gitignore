@@ -9,3 +9,7 @@ npm-debug.log*
 .DS_Store
 uploads/
 docs/
+# Local production-style env used for one-off commands against a hosted database.
+.env.production
+.env.render
+.idea/

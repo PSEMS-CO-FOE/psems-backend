@@ -3,6 +3,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import { auditLogger } from "./middleware/audit";
+import { env } from "./config/env";
 import { errorHandler } from "./middleware/errorHandler";
 import { allocationRouter } from "./modules/allocation/allocation.routes";
 import { authRouter } from "./modules/auth/auth.routes";
@@ -27,8 +28,18 @@ import { usersRouter } from "./modules/users/users.routes";
 
 export const app = express();
 
+// Trailing slashes are stripped because an Origin header never carries one, and
+// a stray slash in the env var fails every request with an opaque CORS error.
+const allowedOrigins = env.CORS_ORIGINS?.split(",")
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter(Boolean);
+
+// Behind a TLS-terminating proxy in production; without this Express reads every
+// request as plain HTTP.
+app.set("trust proxy", 1);
 app.use(helmet());
-app.use(cors({ origin: true, credentials: true })); // dev-permissive; locked to prod origin in Week 12 hardening pass
+// Unset CORS_ORIGINS reflects any origin — acceptable in dev only.
+app.use(cors({ origin: allowedOrigins ?? true, credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
 app.use(auditLogger); // after body parsing (needs req.body to hash), before all routes

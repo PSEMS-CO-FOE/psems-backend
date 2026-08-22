@@ -4,11 +4,19 @@ import { z } from "zod";
 const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
+  // Read by the Prisma CLI only (migrations), never by the client.
+  DIRECT_URL: z.string().optional(),
   REDIS_URL: z.string().min(1, "REDIS_URL is required"),
   JWT_ACCESS_SECRET: z.string().min(16, "JWT_ACCESS_SECRET must be a long random string"),
   JWT_REFRESH_SECRET: z.string().min(16, "JWT_REFRESH_SECRET must be a long random string"),
   ML_SERVICE_URL: z.string().optional(),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  // Comma-separated origins allowed to send credentialed requests. Unset
+  // reflects any origin, which is only acceptable in dev.
+  CORS_ORIGINS: z.string().optional(),
+  // Set to "none" only when the SPA and API sit on different registrable
+  // domains; see refreshCookieOptions in modules/auth/tokens.ts.
+  COOKIE_SAMESITE: z.enum(["strict", "lax", "none"]).optional(),
   // SMTP is optional: absent in dev/test → jsonTransport fallback (emails are
   // logged, not sent). Set all four for the pilot's real university SMTP.
   SMTP_HOST: z.string().optional(),

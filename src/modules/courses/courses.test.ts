@@ -62,7 +62,7 @@ async function createCpi(name: string) {
   const res = await request(app)
     .post("/courses")
     .set("Authorization", `Bearer ${coordToken}`)
-    .send({ name, projectType: "FYP", participationMode: "GROUP", department: "CE", academicYear: "2026" });
+    .send({ name, projectType: "FYP", participationMode: "GROUP", batch: "22ENG", department: "CE", academicYear: "2026" });
   expect(res.status).toBe(201);
   return res.body.id as string;
 }
@@ -181,6 +181,54 @@ describe("Week 3 acceptance: CPI lifecycle setup", () => {
     expect(invite.body.code).toBe("PHASE_NOT_OPEN");
   });
 
+  it("re-applies a preset by name and leaves untouched settings alone", async () => {
+    const cpiId = await createCpi("Preset switching CPI");
+    await setTimeline(cpiId, true);
+
+    // Edit something the preset has no opinion about, then switch preset: the
+    // edit has to survive, or re-applying a preset would silently undo work.
+    await request(app)
+      .patch(`/courses/${cpiId}/policy`)
+      .set("Authorization", `Bearer ${coordToken}`)
+      .send({ requireOverallComment: false, maxIdeasPerGroup: 3 })
+      .expect(200);
+
+    const managed = await request(app)
+      .post(`/courses/${cpiId}/preset`)
+      .set("Authorization", `Bearer ${coordToken}`)
+      .send({ mode: "COORDINATOR_MANAGED" });
+    expect(managed.status).toBe(200);
+    expect(managed.body.mode).toBe("COORDINATOR_MANAGED");
+
+    let policy = await request(app).get(`/courses/${cpiId}/policy`).set("Authorization", `Bearer ${coordToken}`);
+    expect(policy.body.selectionConfirmedBy).toBe("COORDINATOR");
+    expect(policy.body.interestEnabled).toBe(false);
+    expect(policy.body.requireOverallComment).toBe(false);
+    expect(policy.body.maxIdeasPerGroup).toBe(3);
+
+    // And back again, so a coordinator is never stuck with a preset they tried.
+    await request(app)
+      .post(`/courses/${cpiId}/preset`)
+      .set("Authorization", `Bearer ${coordToken}`)
+      .send({ mode: "SUPERVISOR_LED" })
+      .expect(200);
+
+    policy = await request(app).get(`/courses/${cpiId}/policy`).set("Authorization", `Bearer ${coordToken}`);
+    expect(policy.body.selectionConfirmedBy).toBe("SUPERVISOR");
+    expect(policy.body.interestEnabled).toBe(true);
+    expect(policy.body.maxIdeasPerGroup).toBe(3);
+  });
+
+  it("rejects a preset name that is not a mode", async () => {
+    const cpiId = await createCpi("Bad preset CPI");
+    await setTimeline(cpiId, true);
+    await request(app)
+      .post(`/courses/${cpiId}/preset`)
+      .set("Authorization", `Bearer ${coordToken}`)
+      .send({ mode: "WHATEVER" })
+      .expect(400);
+  });
+
   it("applies the Coordinator-Managed preset and still allows supervisors", async () => {
     const cpiId = await createCpi("Coordinator-Managed CPI");
     await setTimeline(cpiId, true);
@@ -210,7 +258,7 @@ describe("Week 3 acceptance: CPI lifecycle setup", () => {
     const create = await request(app)
       .post("/courses")
       .set("Authorization", `Bearer ${lect1Token}`)
-      .send({ name: "x", projectType: "FYP", participationMode: "GROUP", department: "CE", academicYear: "2026" });
+      .send({ name: "x", projectType: "FYP", participationMode: "GROUP", batch: "22ENG", department: "CE", academicYear: "2026" });
     expect(create.status).toBe(403);
 
     const view = await request(app).get(`/courses/${cpiId}`).set("Authorization", `Bearer ${lect1Token}`);

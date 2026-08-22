@@ -38,6 +38,7 @@ jobs:
     env:
       PORT: 4000
       DATABASE_URL: postgresql://psems:psems_test_password@localhost:5432/psems_test
+      DIRECT_URL: postgresql://psems:psems_test_password@localhost:5432/psems_test
       REDIS_URL: redis://localhost:6379
       JWT_ACCESS_SECRET: ci_test_access_secret_do_not_use_in_prod
       JWT_REFRESH_SECRET: ci_test_refresh_secret_do_not_use_in_prod

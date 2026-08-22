@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import type { CookieOptions } from "express";
 import { Role } from "@prisma/client";
 import { env } from "../../config/env";
 import { redis } from "../../config/redis";
@@ -39,3 +40,17 @@ export async function revokeRefreshToken(jti: string): Promise<void> {
 
 export const REFRESH_COOKIE_NAME = "psems_refresh_token";
 export const REFRESH_COOKIE_MAX_AGE_MS = REFRESH_TOKEN_TTL_SECONDS * 1000;
+
+// Same-site by default: the SPA and the API are served from one registrable
+// domain. COOKIE_SAMESITE=none is for deployments split across unrelated hosts
+// (*.vercel.app + *.onrender.com are cross-site by design) — that also makes the
+// cookie third-party, which Safari blocks outright. No `domain`, so the cookie
+// stays host-only to the API. maxAge is deliberately absent: clearCookie merges
+// these options over its own epoch `expires`, and a maxAge would push the expiry
+// back into the future, silently re-issuing the cookie instead of clearing it.
+export const refreshCookieOptions: CookieOptions = {
+  httpOnly: true,
+  secure: env.NODE_ENV === "production",
+  sameSite: env.COOKIE_SAMESITE ?? "strict",
+  path: "/",
+};

@@ -21,6 +21,7 @@ async function setupTwoPendingSelections() {
       name: "Race CPI",
       projectType: "FYP",
       participationMode: "GROUP",
+      batch: "22ENG",
       department: "CE",
       academicYear: "2026",
       mode: "SUPERVISOR_LED",

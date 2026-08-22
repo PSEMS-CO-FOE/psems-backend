@@ -16,7 +16,7 @@ async function setup() {
   const create = await request(app)
     .post("/courses")
     .set(as("coord"))
-    .send({ name: "Scheduling CPI", projectType: "FYP", participationMode: "GROUP", department: "CE", academicYear: "2026" });
+    .send({ name: "Scheduling CPI", projectType: "FYP", participationMode: "GROUP", batch: "22ENG", department: "CE", academicYear: "2026" });
   const cpiId = create.body.id as string;
 
   await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);
@@ -339,6 +339,55 @@ describe("Schedule visibility", () => {
     const supervised = await request(app).get(`/courses/${cpiId}/sessions`).set(as("sup")).expect(200);
     expect(supervised.body).toHaveLength(2);
 
+    await request(app).get(`/courses/${cpiId}/sessions`).set(as("outsider")).expect(403);
+  });
+
+  it("lets an unassigned lecturer find and join an evaluation that is open to all", async () => {
+    const { cpiId, stageId, sessionA } = await setup();
+
+    // "outsider" is an approved lecturer with no role on this course, which is
+    // the FYP demo-day case: nobody is assigned and whoever attends may mark.
+    await request(app).get(`/courses/${cpiId}/sessions`).set(as("outsider")).expect(403);
+
+    await request(app)
+      .put(`/courses/${cpiId}/evaluations/stages/${stageId}/panel-rules`)
+      .set(as("coord"))
+      .send({
+        rules: [
+          { role: "SUPERVISOR", minRequired: 1 },
+          { role: "EVALUATOR", minRequired: 0, openToAll: true },
+        ],
+      })
+      .expect(200);
+
+    // Finding the session is the whole point: without this the join endpoint
+    // existed but there was no way to reach a session id.
+    const open = await request(app).get(`/courses/${cpiId}/sessions`).set(as("outsider")).expect(200);
+    expect(open.body).toHaveLength(2);
+
+    // Seats are taken on the day, so joining is gated to the execution phase.
+    await openPhase(cpiId, CpiPhase.EVALUATION_EXECUTION);
+
+    const joined = await request(app)
+      .post(`/courses/${cpiId}/sessions/${sessionA}/panel/join`)
+      .set(as("outsider"))
+      .send({ role: "EVALUATOR" })
+      .expect(201);
+    expect(joined.body.role).toBe("EVALUATOR");
+
+    // Joining twice is the same seat, not a second one.
+    await request(app)
+      .post(`/courses/${cpiId}/sessions/${sessionA}/panel/join`)
+      .set(as("outsider"))
+      .send({ role: "EVALUATOR" })
+      .expect(201);
+    const panel = await request(app).get(`/courses/${cpiId}/sessions/${sessionA}/panel`).set(as("coord")).expect(200);
+    expect(panel.body.panelists.filter((pl: { user: { id: string } | null }) => pl.user?.id === userIds.outsider)).toHaveLength(1);
+  });
+
+  it("keeps a course with no open stage closed to outsiders", async () => {
+    // Widening visibility must not turn every timetable into a public one.
+    const { cpiId } = await setup();
     await request(app).get(`/courses/${cpiId}/sessions`).set(as("outsider")).expect(403);
   });
 

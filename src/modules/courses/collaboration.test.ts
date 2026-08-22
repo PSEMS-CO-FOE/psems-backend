@@ -20,6 +20,7 @@ async function createCpi(name: string, extra: Record<string, unknown> = {}) {
       name,
       projectType: "FYP",
       participationMode: "GROUP",
+      batch: "22ENG",
       department: "CE",
       academicYear: "2026",
       mode: "SUPERVISOR_LED",
@@ -46,7 +47,8 @@ beforeAll(async () => {
   await makeUser("outsider", Role.LECTURER, { approvedLecturer: true });
   await makeUser("s1", Role.STUDENT, { student: true });
   await makeUser("s2", Role.STUDENT, { student: true });
-  for (const key of ["coord", "supA", "supB", "outsider", "s1", "s2"]) await login(key);
+  await makeUser("s3", Role.STUDENT, { student: true });
+  for (const key of ["coord", "supA", "supB", "outsider", "s1", "s2", "s3"]) await login(key);
 });
 
 afterAll(async () => {
@@ -107,6 +109,12 @@ describe("Co-supervisors on an idea", () => {
 describe("A lecturer can find a course and ask to supervise", () => {
   it("discovers the course, requests, and the coordinator approves into an invitation", async () => {
     const cpiId = await createCpi("Discoverable CPI");
+
+    // A course still being set up should not collect supervisor requests.
+    const beforePublish = await request(app).get("/courses/open").set(as("outsider"));
+    expect(beforePublish.body.find((c: { id: string }) => c.id === cpiId)).toBeUndefined();
+
+    await request(app).post(`/courses/${cpiId}/status`).set(as("coord")).send({ status: "ACTIVE" }).expect(200);
 
     const open = await request(app).get("/courses/open").set(as("outsider"));
     expect(open.status).toBe(200);
@@ -201,11 +209,25 @@ describe("Interest flows both ways and can be withdrawn", () => {
 });
 
 describe("A student can take part without a group", () => {
-  it("creates a group of one, and refuses when the course does not allow it", async () => {
-    const groupCpi = await createCpi("Groups only CPI");
+  it("lets a student work alone on a group course, unless the coordinator turns it off", async () => {
+    const groupCpi = await createCpi("Groups CPI");
     await openPhase(groupCpi, CpiPhase.STUDENT_REGISTRATION);
 
-    const refused = await request(app).post(`/courses/${groupCpi}/groups/solo`).set(as("s2"));
+    // Allowed by default now: a batch rarely divides evenly, so the student left
+    // over must still be able to proceed.
+    const allowed = await request(app).post(`/courses/${groupCpi}/groups/solo`).set(as("s2"));
+    expect(allowed.status).toBe(201);
+
+    // The coordinator can still insist on groups.
+    const strictCpi = await createCpi("Groups only CPI");
+    await request(app)
+      .patch(`/courses/${strictCpi}/policy`)
+      .set(as("coord"))
+      .send({ allowIndividualParticipation: false })
+      .expect(200);
+    await openPhase(strictCpi, CpiPhase.STUDENT_REGISTRATION);
+
+    const refused = await request(app).post(`/courses/${strictCpi}/groups/solo`).set(as("s3"));
     expect(refused.status).toBe(409);
 
     const soloCpi = await createCpi("Individual CPI", { participationMode: "INDIVIDUAL" });
@@ -263,5 +285,18 @@ describe("Directory profiles", () => {
     expect(bare.status).toBe(200);
     expect(bare.body.profile).toBeNull();
     expect(bare.body.user.id).toBe(userIds.s2);
+  });
+
+  it("gives a lecturer supervised projects and a student their own", async () => {
+    // The two lists are separate on purpose: the profile page picks which to
+    // show from the person's role, so a student is never offered a "Projects
+    // supervised" tab that can only be empty.
+    const lecturer = await request(app).get(`/profiles/${userIds.supA}`).set(as("s1")).expect(200);
+    expect(Array.isArray(lecturer.body.supervisedProjects)).toBe(true);
+    expect(lecturer.body.ownProjects).toEqual([]);
+
+    const student = await request(app).get(`/profiles/${userIds.s1}`).set(as("s1")).expect(200);
+    expect(student.body.supervisedProjects).toEqual([]);
+    expect(Array.isArray(student.body.ownProjects)).toBe(true);
   });
 });
