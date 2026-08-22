@@ -50,7 +50,11 @@ authRouter.post("/refresh", async (req, res, next) => {
       maxAge: REFRESH_COOKIE_MAX_AGE_MS,
     });
 
-    return res.json({ accessToken: result.accessToken });
+    return res.json({
+      accessToken: result.accessToken,
+      forcePasswordChange: result.forcePasswordChange,
+      user: result.user,
+    });
   } catch (err) {
     return next(err);
   }
