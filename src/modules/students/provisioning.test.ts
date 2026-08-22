@@ -45,13 +45,13 @@ describe("Week 2 acceptance: student bulk provisioning", () => {
 
   it("provisions valid rows, reports invalid/duplicate rows, queues credential emails", async () => {
     const csv = [
-      "email,fullName,studentId,department,year",
-      `${PREFIX}s1@psems.dev,Test One,W2J001,Computer Engineering,3`,
-      `${PREFIX}s2@psems.dev,Test Two,W2J002,Computer Engineering,3`,
-      `${PREFIX}s3@psems.dev,Test Three,W2J003,Computer Engineering,3`,
-      "not-an-email,Broken Row,W2J004,Computer Engineering,3", // invalid
-      `${PREFIX}s1@psems.dev,Dup In File,W2J005,Computer Engineering,3`, // duplicate within file
-      `${ADMIN_EMAIL},Already Exists,W2J006,Computer Engineering,3`, // existing account
+      "email,fullName,studentId,registrationNumber,batch,department,year",
+      `${PREFIX}s1@psems.dev,Test One,W2J001,,22ENG,Computer Engineering,3`,
+      `${PREFIX}s2@psems.dev,Test Two,W2J002,,22ENG,Computer Engineering,3`,
+      `${PREFIX}s3@psems.dev,Test Three,W2J003,,22ENG,Computer Engineering,3`,
+      "not-an-email,Broken Row,W2J004,,22ENG,Computer Engineering,3", // invalid
+      `${PREFIX}s1@psems.dev,Dup In File,W2J005,,22ENG,Computer Engineering,3`, // duplicate within file
+      `${ADMIN_EMAIL},Already Exists,W2J006,,22ENG,Computer Engineering,3`, // existing account
     ].join("\n");
 
     const token = await loginToken(ADMIN_EMAIL, ADMIN_PASSWORD);

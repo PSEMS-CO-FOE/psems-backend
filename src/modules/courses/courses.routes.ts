@@ -8,14 +8,18 @@ import {
   applyPresetSchema,
   assignEvaluatorSchema,
   createCpiSchema,
+  decideJoinRequestSchema,
   decideSupervisorRequestSchema,
+  joinRequestSchema,
   inviteSupervisorSchema,
   requestToSuperviseSchema,
   respondInviteSchema,
+  setCourseStatusSchema,
   setHeadJudgeSchema,
   setTimelineSchema,
 } from "./courses.schemas";
 import * as courses from "./courses.service";
+import * as joinRequests from "./joinRequests.service";
 
 export const coursesRouter = Router();
 
@@ -74,6 +78,26 @@ coursesRouter.get("/mine/lecturer", ...authed, async (req, res, next) => {
 
 // Discovery: any approved lecturer can find courses and ask to join one.
 // Deliberately mounted before the /:cpiId routes so "open" is not read as an id.
+// The batches this department already uses, so the create form can suggest them
+// rather than relying on the same code being typed the same way twice.
+coursesRouter.get("/batches", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    return res.json(await courses.listDepartmentBatches(req.user!.user_id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Active courses in the student's department for OTHER batches — name and batch
+// only, never contents — so a repeated student can name the one they want.
+coursesRouter.get("/other-batches", ...authed, async (req, res, next) => {
+  try {
+    return res.json(await courses.listOtherBatchCpis(req.user!.user_id));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 coursesRouter.get("/open", ...authed, async (req, res, next) => {
   try {
     return res.json(await courses.listOpenCpis(req.user!.user_id));
@@ -95,6 +119,60 @@ coursesRouter.get("/:cpiId/summary", ...authed, async (req, res, next) => {
 coursesRouter.get("/:cpiId", ...coordinatorOnly, async (req, res, next) => {
   try {
     return res.json(await courses.getCpiDetail(req.user!.user_id, req.params.cpiId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+coursesRouter.post("/:cpiId/status", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const { status } = setCourseStatusSchema.parse(req.body);
+    return res.json(await courses.setCourseStatus(req.user!.user_id, req.params.cpiId, status));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Everyone the course is for, and what each of them is doing.
+coursesRouter.get("/:cpiId/roster", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    return res.json(await courses.getCourseRoster(req.user!.user_id, req.params.cpiId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// A repeated student asking to take this course with a later batch. Not
+// phase-gated: the request is made after their own course has finished.
+coursesRouter.post("/:cpiId/join-requests", ...authed, async (req, res, next) => {
+  try {
+    const { reason } = joinRequestSchema.parse(req.body);
+    return res.status(201).json(await joinRequests.requestToJoin(req.user!.user_id, req.params.cpiId, reason));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+coursesRouter.get("/:cpiId/join-requests", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    return res.json(await joinRequests.listJoinRequests(req.user!.user_id, req.params.cpiId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+coursesRouter.post("/:cpiId/join-requests/:requestId", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const { approve, note } = decideJoinRequestSchema.parse(req.body);
+    return res.json(
+      await joinRequests.decideJoinRequest(
+        req.user!.user_id,
+        req.params.cpiId,
+        req.params.requestId,
+        approve,
+        note,
+      ),
+    );
   } catch (err) {
     return next(err);
   }

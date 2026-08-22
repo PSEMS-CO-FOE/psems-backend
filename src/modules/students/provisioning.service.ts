@@ -3,6 +3,7 @@ import { parse } from "csv-parse/sync";
 import crypto from "crypto";
 import { Prisma, Role } from "@prisma/client";
 import { prisma } from "../../config/database";
+import { normalizeBatch } from "../courses/batch";
 import { emailQueue } from "../../jobs/emailQueue";
 import { assertRole } from "../shared/authorization";
 import { csvStudentRowSchema, CsvStudentRow } from "./students.schemas";
@@ -111,6 +112,7 @@ export async function bulkProvisionStudents(
           create: {
             studentId: data.studentId,
             registrationNumber: data.registrationNumber,
+            batch: normalizeBatch(data.batch),
             department: data.department,
             year: data.year,
           },

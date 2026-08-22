@@ -25,12 +25,16 @@ export const updatePolicySchema = z
     selectionConfirmedBy: z.nativeEnum(SelectionConfirmer),
 
     allowIndividualParticipation: z.boolean(),
+    // Advisory: a group over or under it is flagged, never refused.
+    targetGroupSize: z.number().int().min(1).max(20).nullable(),
     autoCreateSoloGroup: z.boolean(),
 
     headJudgeEnabled: z.boolean(),
     requireOverallComment: z.boolean(),
     availabilityRequiredFrom: z.nativeEnum(AvailabilityRequirement),
 
+    // Below this a student is repeated. Read only by the coordinator's views.
+    passMarkPercent: z.number().min(0).max(100).nullable(),
     gradingEnabled: z.boolean(),
     caContributionPercent: z.number().min(0).max(100).nullable(),
   })

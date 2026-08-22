@@ -46,7 +46,7 @@ async function makeUser(key: string, role: Role, opts: { student?: boolean; appr
       fullName: key,
       passwordHash: await bcrypt.hash(PASSWORD, 12),
       role,
-      ...(opts.student ? { student: { create: { studentId: `${PREFIX}${key}`, department: "CE", year: 3 } } } : {}),
+      ...(opts.student ? { student: { create: { studentId: `${PREFIX}${key}`, batch: "22ENG", department: "CE", year: 3 } } } : {}),
       ...(opts.approvedLecturer ? { lecturer: { create: { approvalStatus: LecturerApprovalStatus.APPROVED } } } : {}),
     },
   });
@@ -77,7 +77,7 @@ async function setup(evaluatorsRequired: number, assignEvs: string[]) {
   const create = await request(app)
     .post("/courses")
     .set(as("coord"))
-    .send({ name: "Scoring CPI", projectType: "FYP", participationMode: "GROUP", department: "CE", academicYear: "2026" });
+    .send({ name: "Scoring CPI", projectType: "FYP", participationMode: "GROUP", batch: "22ENG", department: "CE", academicYear: "2026" });
   const cpiId = create.body.id as string;
 
   await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);

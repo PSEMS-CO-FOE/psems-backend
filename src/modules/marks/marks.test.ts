@@ -29,7 +29,7 @@ async function setupApprovedSession(opts: {
   const create = await request(app)
     .post("/courses")
     .set(as("coord"))
-    .send({ name: "Marks CPI", projectType: "FYP", participationMode: "GROUP", department: "CE", academicYear: "2026" });
+    .send({ name: "Marks CPI", projectType: "FYP", participationMode: "GROUP", batch: "22ENG", department: "CE", academicYear: "2026" });
   const cpiId = create.body.id as string;
   const [leader, ...others] = opts.students;
 
@@ -356,6 +356,104 @@ describe("Publishing", () => {
       .post(`/courses/${s.cpiId}/marks/publish`)
       .set(as("coord"))
       .send({ stageId: null, publishMarks: true, publishComments: false })
+      .expect(409);
+  });
+});
+
+describe("The pass mark", () => {
+  it("flags who fell below it, and flags nobody when the course has none", async () => {
+    const s = await setupApprovedSession({ stage: mixedStage, students: ["s1", "s2"], evaluators: ["ev1"] });
+    const product = s.criteria.find((c) => c.name === "Product")!;
+    const contribution = s.criteria.find((c) => c.name === "Contribution")!;
+    await request(app)
+      .post(`/courses/${s.cpiId}/sessions/${s.sessionId}/scores`)
+      .set(as("ev1"))
+      .send({
+        scores: [
+          { criterionId: product.id, score: 8 },
+          { criterionId: contribution.id, studentId: s.studentIdByKey.s1, score: 10 },
+          { criterionId: contribution.id, studentId: s.studentIdByKey.s2, score: 6 },
+        ],
+        overallComment: "Reviewed.",
+      })
+      .expect(201);
+    await finalize(s.cpiId, s.sessionId, s.reviewer);
+    await request(app).post(`/courses/${s.cpiId}/marks/aggregate`).set(as("coord")).expect(200);
+
+    // No pass mark set: nobody is flagged, whatever they scored.
+    let sheet = await request(app).get(`/courses/${s.cpiId}/marks/sheet`).set(as("coord")).expect(200);
+    expect(sheet.body.belowPassMark).toBe(0);
+    expect(sheet.body.rows.every((r: { belowPassMark: boolean }) => !r.belowPassMark)).toBe(true);
+
+    // The two students scored 90 and 70, so 80 catches exactly one of them.
+    await request(app).patch(`/courses/${s.cpiId}/policy`).set(as("coord")).send({ passMarkPercent: 80 }).expect(200);
+
+    sheet = await request(app).get(`/courses/${s.cpiId}/marks/sheet`).set(as("coord")).expect(200);
+    expect(sheet.body.passMarkPercent).toBe(80);
+    expect(sheet.body.belowPassMark).toBe(1);
+    const byIndex = Object.fromEntries(sheet.body.rows.map((r: { indexNumber: string }) => [r.indexNumber, r]));
+    expect(byIndex[`${h.prefix}s1`].belowPassMark).toBe(false);
+    expect(byIndex[`${h.prefix}s2`].belowPassMark).toBe(true);
+
+    // A student's own view never carries it — being repeated is the
+    // department's decision to communicate, not PSEMS's to announce.
+    await request(app)
+      .post(`/courses/${s.cpiId}/marks/publish`)
+      .set(as("coord"))
+      .send({ stageId: null, publishMarks: true, publishComments: false })
+      .expect(200);
+    const studentView = await request(app).get(`/courses/${s.cpiId}/marks`).set(as("s2")).expect(200);
+    expect(studentView.body.passMarkPercent).toBeUndefined();
+  });
+});
+
+describe("The credit split", () => {
+  it("can be changed after a submission exists, and refused once marks are aggregated", async () => {
+    const onlyStage: StageInput = {
+      name: "Proposal",
+      weight: 100,
+      panelRules: [{ role: "EVALUATOR", minRequired: 1 }],
+      submissionRequired: false,
+      criteria: [{ name: "C1", weight: 100, maxScore: 10 }],
+    };
+    const s = await setupApprovedSession({ stage: onlyStage, students: ["s1"], evaluators: ["ev1"] });
+
+    // A split that no longer totals 100 is refused — the whole reason this
+    // takes every stage at once rather than patching one.
+    const lopsided = await request(app)
+      .put(`/courses/${s.cpiId}/evaluations/stage-weights`)
+      .set(as("coord"))
+      .send({ weights: [{ stageId: s.stageId, weight: 60 }] });
+    expect(lopsided.status).toBe(400);
+
+    // A stage the course does not have is refused for the same reason.
+    const unknown = await request(app)
+      .put(`/courses/${s.cpiId}/evaluations/stage-weights`)
+      .set(as("coord"))
+      .send({ weights: [{ stageId: "00000000-0000-0000-0000-000000000000", weight: 100 }] });
+    expect(unknown.status).toBe(400);
+
+    await request(app)
+      .put(`/courses/${s.cpiId}/evaluations/stage-weights`)
+      .set(as("coord"))
+      .send({ weights: [{ stageId: s.stageId, weight: 100 }] })
+      .expect(200);
+
+    // Once marks are aggregated, reweighting would rewrite what students have
+    // already been shown.
+    const [c1] = s.criteria;
+    await request(app)
+      .post(`/courses/${s.cpiId}/sessions/${s.sessionId}/scores`)
+      .set(as("ev1"))
+      .send({ scores: [{ criterionId: c1.id, score: 8 }], overallComment: "Reviewed." })
+      .expect(201);
+    await finalize(s.cpiId, s.sessionId, s.reviewer);
+    await request(app).post(`/courses/${s.cpiId}/marks/aggregate`).set(as("coord")).expect(200);
+
+    await request(app)
+      .put(`/courses/${s.cpiId}/evaluations/stage-weights`)
+      .set(as("coord"))
+      .send({ weights: [{ stageId: s.stageId, weight: 100 }] })
       .expect(409);
   });
 });

@@ -1,4 +1,4 @@
-import { CpiMode, CpiParticipationMode, CpiPhase } from "@prisma/client";
+import { CourseStatus, CpiMode, CpiParticipationMode, CpiPhase } from "@prisma/client";
 import { z } from "zod";
 
 export const createCpiSchema = z.object({
@@ -6,6 +6,9 @@ export const createCpiSchema = z.object({
   projectType: z.string().trim().min(1).max(100),
   participationMode: z.nativeEnum(CpiParticipationMode),
   department: z.string().trim().min(1),
+  // The intake this course runs for, e.g. 22ENG. Required, and free text on
+  // purpose — a fixed pattern would block a special or repeat intake.
+  batch: z.string().trim().min(1).max(20),
   academicYear: z.string().trim().min(1),
   // Optional preset that seeds the policy. Omitting it starts from defaults;
   // it does not gate anything afterwards.
@@ -43,4 +46,15 @@ export const requestToSuperviseSchema = z.object({
 
 export const decideSupervisorRequestSchema = z.object({
   decision: z.enum(["APPROVE", "REJECT"]),
+});
+
+export const setCourseStatusSchema = z.object({ status: z.nativeEnum(CourseStatus) });
+
+// A repeated student asking to take a course with a later batch. The reason is
+// required: an exam-related decision should say why it was made.
+export const joinRequestSchema = z.object({ reason: z.string().trim().min(1).max(1000) });
+
+export const decideJoinRequestSchema = z.object({
+  approve: z.boolean(),
+  note: z.string().trim().max(1000).optional(),
 });

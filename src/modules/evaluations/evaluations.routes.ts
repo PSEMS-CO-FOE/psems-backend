@@ -10,6 +10,7 @@ import {
   patchStageSchema,
   pooledShareSchema,
   setPanelRulesSchema,
+  setStageWeightsSchema,
 } from "./evaluations.schemas";
 import { timerSegmentTemplateSchema } from "../scheduling/scheduling.schemas";
 import * as evaluations from "./evaluations.service";
@@ -71,6 +72,15 @@ evaluationsRouter.put("/stages/:stageId/panel-rules", ...coordinatorOnly, async 
   try {
     const input = setPanelRulesSchema.parse(req.body);
     return res.json(await evaluations.setPanelRules(req.user!.user_id, req.params.cpiId, req.params.stageId, input));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+evaluationsRouter.put("/stage-weights", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const { weights } = setStageWeightsSchema.parse(req.body);
+    return res.json(await evaluations.setStageWeights(req.user!.user_id, req.params.cpiId, weights));
   } catch (err) {
     return next(err);
   }

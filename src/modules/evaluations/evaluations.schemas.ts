@@ -97,3 +97,11 @@ export type EvaluationConfigInput = z.infer<typeof evaluationConfigSchema>;
 export type PatchStageInput = z.infer<typeof patchStageSchema>;
 export type SetPanelRulesInput = z.infer<typeof setPanelRulesSchema>;
 export type PooledShareInput = z.infer<typeof pooledShareSchema>;
+
+// Every stage's weight at once, so the sum can be checked. A per-stage patch
+// could leave the config adding up to something other than 100.
+export const setStageWeightsSchema = z.object({
+  weights: z
+    .array(z.object({ stageId: z.string().uuid(), weight: z.number().int().min(1).max(100) }))
+    .min(1),
+});

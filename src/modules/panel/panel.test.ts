@@ -22,6 +22,7 @@ async function setupOpenEvaluation(
       name: "Open Demo Day",
       projectType: "FYP",
       participationMode: "GROUP",
+      batch: "22ENG",
       department: "CE",
       academicYear: "2026",
       mode: "COORDINATOR_MANAGED",

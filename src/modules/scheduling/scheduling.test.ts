@@ -16,7 +16,7 @@ async function setup() {
   const create = await request(app)
     .post("/courses")
     .set(as("coord"))
-    .send({ name: "Scheduling CPI", projectType: "FYP", participationMode: "GROUP", department: "CE", academicYear: "2026" });
+    .send({ name: "Scheduling CPI", projectType: "FYP", participationMode: "GROUP", batch: "22ENG", department: "CE", academicYear: "2026" });
   const cpiId = create.body.id as string;
 
   await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);

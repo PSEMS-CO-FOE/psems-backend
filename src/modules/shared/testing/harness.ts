@@ -44,6 +44,7 @@ export interface MakeUserOptions {
   student?: boolean;
   approvedLecturer?: boolean;
   department?: string;
+  batch?: string;
 }
 
 export function createHarness(prefix: string) {
@@ -60,7 +61,16 @@ export function createHarness(prefix: string) {
         passwordHash: await bcrypt.hash(TEST_PASSWORD, 12),
         role,
         ...(opts.student
-          ? { student: { create: { studentId: `${prefix}${key}`, department: opts.department ?? "CE", year: 3 } } }
+          ? {
+              student: {
+                create: {
+                  studentId: `${prefix}${key}`,
+                  batch: opts.batch ?? "22ENG",
+                  department: opts.department ?? "CE",
+                  year: 3,
+                },
+              },
+            }
           : {}),
         ...(opts.approvedLecturer ? { lecturer: { create: { approvalStatus: LecturerApprovalStatus.APPROVED } } } : {}),
       },

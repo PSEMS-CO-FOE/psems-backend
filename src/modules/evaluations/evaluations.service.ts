@@ -136,6 +136,45 @@ export async function setTimerSegmentTemplates(
   return setSegmentTemplates(stageId, segments);
 }
 
+// Change the credit split after submissions exist. Locked out of the
+// replace-all config path, which matters when one course spans two semesters:
+// the first semester's report upload would otherwise freeze the split for the
+// rest of the module.
+//
+// Refused once marks are aggregated, matching the rule Wave 1 set for reopening
+// a session — finalizing is not the point of no return, aggregation is. A weight
+// changed after that would silently rewrite marks students have already seen.
+export async function setStageWeights(
+  coordinatorUserId: string,
+  cpiId: string,
+  weights: { stageId: string; weight: number }[],
+) {
+  await loadOwnedCpi(coordinatorUserId, cpiId);
+
+  const aggregated = await prisma.finalMark.count({ where: { courseInstanceId: cpiId } });
+  if (aggregated > 0) {
+    throw new AuthError(409, "Marks have been aggregated — reweighting now would change published results");
+  }
+
+  const stages = await prisma.evaluationStage.findMany({
+    where: { courseInstanceId: cpiId },
+    select: { id: true },
+  });
+  const known = new Set(stages.map((s) => s.id));
+  if (weights.length !== stages.length || weights.some((w) => !known.has(w.stageId))) {
+    throw new AuthError(400, "Send every stage's weight together, so the total can be checked");
+  }
+
+  const total = weights.reduce((sum, w) => sum + w.weight, 0);
+  if (total !== 100) throw new AuthError(400, `Stage weights must sum to 100 (got ${total})`);
+
+  await prisma.$transaction(
+    weights.map((w) => prisma.evaluationStage.update({ where: { id: w.stageId }, data: { weight: w.weight } })),
+  );
+
+  return getEvaluationConfig(coordinatorUserId, cpiId);
+}
+
 // Weight the pooled contribution from panelists whose marks the coordinator
 // decides on (walk-ins, guests without a formal role). The scorer limit is held
 // uniform across the stage so a group seen by eleven people is not compared with

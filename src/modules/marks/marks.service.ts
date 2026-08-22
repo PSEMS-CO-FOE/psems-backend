@@ -406,6 +406,7 @@ export interface SheetRow {
   total: number;
   grade: string | null;
   zeroTotal: boolean;
+  belowPassMark: boolean;
 }
 
 // Mark sheets carry a surname and initials in separate columns. Names are stored
@@ -467,6 +468,7 @@ export async function getMarkSheet(coordinatorUserId: string, cpiId: string) {
         total: 0,
         grade: null,
         zeroTotal: false,
+        belowPassMark: false,
       } as SheetRow);
 
     row.stagePercents[mark.evaluationStageId] = round2(mark.stageScorePercent);
@@ -487,6 +489,9 @@ export async function getMarkSheet(coordinatorUserId: string, cpiId: string) {
       // Flagged rather than dropped: a zero total usually means a student was
       // never scored, which the coordinator needs to see before submitting.
       zeroTotal: row.total === 0,
+      // Who the coordinator needs to look at. Never sent to the student — being
+      // repeated is the department's decision to make and to communicate.
+      belowPassMark: policy.passMarkPercent !== null && row.total < policy.passMarkPercent,
     }))
     .sort((a, b) => a.indexNumber.localeCompare(b.indexNumber));
 
@@ -494,6 +499,7 @@ export async function getMarkSheet(coordinatorUserId: string, cpiId: string) {
     courseName: cpi.name,
     academicYear: cpi.academicYear,
     gradingEnabled: policy.gradingEnabled,
+    passMarkPercent: policy.passMarkPercent,
     gradeIsForWholeModule: sheetShowsGrade || !policy.gradingEnabled,
     caContributionPercent: policy.caContributionPercent,
     stages,
@@ -501,5 +507,6 @@ export async function getMarkSheet(coordinatorUserId: string, cpiId: string) {
     weights: Object.fromEntries(stages.map((s) => [s.id, round2(s.weight / 100)])),
     rows,
     flagged: rows.filter((r) => r.zeroTotal).length,
+    belowPassMark: rows.filter((r) => r.belowPassMark).length,
   };
 }

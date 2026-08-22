@@ -62,7 +62,7 @@ async function createCpi(name: string) {
   const res = await request(app)
     .post("/courses")
     .set("Authorization", `Bearer ${coordToken}`)
-    .send({ name, projectType: "FYP", participationMode: "GROUP", department: "CE", academicYear: "2026" });
+    .send({ name, projectType: "FYP", participationMode: "GROUP", batch: "22ENG", department: "CE", academicYear: "2026" });
   expect(res.status).toBe(201);
   return res.body.id as string;
 }
@@ -258,7 +258,7 @@ describe("Week 3 acceptance: CPI lifecycle setup", () => {
     const create = await request(app)
       .post("/courses")
       .set("Authorization", `Bearer ${lect1Token}`)
-      .send({ name: "x", projectType: "FYP", participationMode: "GROUP", department: "CE", academicYear: "2026" });
+      .send({ name: "x", projectType: "FYP", participationMode: "GROUP", batch: "22ENG", department: "CE", academicYear: "2026" });
     expect(create.status).toBe(403);
 
     const view = await request(app).get(`/courses/${cpiId}`).set("Authorization", `Bearer ${lect1Token}`);
