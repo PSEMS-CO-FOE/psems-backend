@@ -15,6 +15,7 @@
     "test": "jest",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
+    "admin:create": "tsx src/scripts/createAdmin.ts",
     "prisma:studio": "prisma studio"
   },
   "repository": {
