@@ -86,7 +86,9 @@ export async function refreshSession(refreshTokenJti: string) {
 
   const accessToken = signAccessToken({ user_id: user.id, role: user.role, email: user.email });
   const newRefreshToken = await issueRefreshToken(user.id);
-.
+
+  // Same shape as login: the access token lives in memory on the client, so a
+  // reload has only the cookie to rebuild the whole session from.
   return {
     accessToken,
     refreshToken: newRefreshToken,
