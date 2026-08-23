@@ -261,7 +261,7 @@ describe("Directory profiles", () => {
         about: "Works on wireless systems.",
         department: "CE",
         interests: ["Wireless", "IoT", "Wireless"],
-        outputs: [{ title: "A paper on mesh routing", venue: "ICC", year: 2025 }],
+        outputs: [{ title: "A paper on mesh routing", venue: "ICC" }],
       });
     expect(mine.status).toBe(200);
     // Duplicate tags collapse.

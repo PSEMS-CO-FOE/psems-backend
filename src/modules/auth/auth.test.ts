@@ -23,7 +23,7 @@ describe("Week 1 acceptance: login + forced first-login password change", () => 
         role: Role.STUDENT,
         forcePasswordChange: true,
         student: {
-          create: { studentId: "WEEK1-TEST-001", batch: "22ENG", department: "Test Dept", year: 1 },
+          create: { studentId: "WEEK1-TEST-001", batch: "22ENG", department: "Test Dept" },
         },
       },
     });

@@ -295,15 +295,13 @@ model User {
 model Student {
   id                 String  @id @default(uuid())
   userId             String  @unique @map("user_id")
+  // Index number, e.g. 22ENG082. The database key is `id` above.
   studentId          String  @unique @map("student_id")
-  // Distinct from studentId: mark sheets carry both an index number and a
-  // registration number. Nullable — older records have only the index.
+  // Registration number, e.g. EN108960. Mark sheets carry both numbers.
   registrationNumber String? @unique @map("registration_number")
-  // The intake the student belongs to, e.g. 22ENG. Fixed for life, unlike year
-  // of study, and it is what decides which courses they can see.
+  // Intake, e.g. 22ENG. Fixed for life, and it decides which courses are visible.
   batch              String
   department         String
-  year               Int
   provisioningStatus String  @default("ACTIVE") @map("provisioning_status")
 
   user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)

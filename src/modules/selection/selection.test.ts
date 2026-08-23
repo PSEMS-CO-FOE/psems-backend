@@ -46,7 +46,7 @@ async function makeUser(key: string, role: Role, opts: { student?: boolean; appr
       fullName: key,
       passwordHash: await bcrypt.hash(PASSWORD, 12),
       role,
-      ...(opts.student ? { student: { create: { studentId: `${PREFIX}${key}`, batch: "22ENG", department: "CE", year: 3 } } } : {}),
+      ...(opts.student ? { student: { create: { studentId: `${PREFIX}${key}`, batch: "22ENG", department: "CE" } } } : {}),
       ...(opts.approvedLecturer
         ? { lecturer: { create: { approvalStatus: LecturerApprovalStatus.APPROVED } } }
         : {}),
