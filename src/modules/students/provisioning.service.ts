@@ -7,7 +7,7 @@ import { normalizeBatch } from "../courses/batch";
 import { emailQueue } from "../../jobs/emailQueue";
 import { assertRole } from "../shared/authorization";
 import { csvStudentRowSchema, CsvStudentRow } from "./students.schemas";
-import { generateTempPassword } from "./tempPassword";
+import { generateTempPassword } from "../shared/tempPassword";
 
 const BCRYPT_WORK_FACTOR = 12;
 
