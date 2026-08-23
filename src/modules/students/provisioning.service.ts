@@ -46,13 +46,13 @@ export async function bulkProvisionStudents(
   // Pre-check duplicates so re-running an overlapping CSV provisions the missing
   // students instead of failing the batch.
   const emails = valid.map((v) => v.data.email);
-  const studentIds = valid.map((v) => v.data.studentId);
+  const studentIndexes = valid.map((v) => v.data.studentIndex);
   const registrationNumbers = valid
     .map((v) => v.data.registrationNumber)
     .filter((value): value is string => Boolean(value));
   const [existingUsers, existingStudents, existingRegistrations] = await Promise.all([
     prisma.user.findMany({ where: { email: { in: emails } }, select: { email: true } }),
-    prisma.student.findMany({ where: { studentId: { in: studentIds } }, select: { studentId: true } }),
+    prisma.student.findMany({ where: { studentId: { in: studentIndexes } }, select: { studentId: true } }),
     prisma.student.findMany({
       where: { registrationNumber: { in: registrationNumbers } },
       select: { registrationNumber: true },
@@ -68,22 +68,22 @@ export async function bulkProvisionStudents(
   const seenInFile = new Set<string>();
   const toCreate: { row: number; data: CsvStudentRow }[] = [];
   for (const entry of valid) {
-    const { email, studentId, registrationNumber } = entry.data;
+    const { email, studentIndex, registrationNumber } = entry.data;
     // registrationNumber is unique too, and the creates run in one transaction,
     // so a single repeat would otherwise fail the whole upload.
     if (existingEmailSet.has(email)) {
       skipped.push({ row: entry.row, email, reason: "email already has an account" });
-    } else if (existingStudentIdSet.has(studentId)) {
-      skipped.push({ row: entry.row, email, reason: `studentId ${studentId} already exists` });
+    } else if (existingStudentIdSet.has(studentIndex)) {
+      skipped.push({ row: entry.row, email, reason: `index number ${studentIndex} already exists` });
     } else if (registrationNumber && existingRegistrationSet.has(registrationNumber)) {
       skipped.push({ row: entry.row, email, reason: `registrationNumber ${registrationNumber} already exists` });
-    } else if (seenInFile.has(email) || seenInFile.has(studentId)) {
+    } else if (seenInFile.has(email) || seenInFile.has(studentIndex)) {
       skipped.push({ row: entry.row, email, reason: "duplicate row within this file" });
     } else if (registrationNumber && seenInFile.has(registrationNumber)) {
       skipped.push({ row: entry.row, email, reason: "duplicate registrationNumber within this file" });
     } else {
       seenInFile.add(email);
-      seenInFile.add(studentId);
+      seenInFile.add(studentIndex);
       if (registrationNumber) seenInFile.add(registrationNumber);
       toCreate.push(entry);
     }
@@ -110,11 +110,10 @@ export async function bulkProvisionStudents(
         forcePasswordChange: true, // Week 1's gate takes over from here
         student: {
           create: {
-            studentId: data.studentId,
+            studentId: data.studentIndex,
             registrationNumber: data.registrationNumber,
             batch: normalizeBatch(data.batch),
             department: data.department,
-            year: data.year,
           },
         },
         provisioningLogs: {
