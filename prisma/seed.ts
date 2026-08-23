@@ -5,7 +5,19 @@ const prisma = new PrismaClient();
 
 const BCRYPT_WORK_FACTOR = 12;
 
+// These passwords are committed to a public repo, so this must never touch a
+// real database. A deployment gets its first account from `npm run admin:create`.
+function assertNotProduction() {
+  if (process.env.NODE_ENV === "production") {
+    console.error("Refusing to seed: these accounts have published passwords.");
+    console.error("Create the first real account with: npm run admin:create -- <email> <password>");
+    process.exit(1);
+  }
+}
+
 async function main() {
+  assertNotProduction();
+
   const adminPasswordHash = await bcrypt.hash("Admin#Pilot2026", BCRYPT_WORK_FACTOR);
   const studentTempPasswordHash = await bcrypt.hash("Temp#Passw0rd1", BCRYPT_WORK_FACTOR);
   const coordinatorPasswordHash = await bcrypt.hash("Coord#Pilot2026", BCRYPT_WORK_FACTOR);
