@@ -2,6 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { Role } from "@prisma/client";
 import { requireAuth } from "../../middleware/auth";
+import { accountRequestRateLimit } from "../../middleware/rateLimit";
 import { blockIfPasswordChangeRequired } from "../../middleware/forcePasswordChange";
 import { requireRole } from "../../middleware/role";
 import { bulkProvisionLecturers } from "./lecturerProvisioning.service";
@@ -39,7 +40,7 @@ lecturersRouter.post(
 
 // Public: anyone may apply; the account stays PENDING (login blocked) until
 // a System Admin approves it.
-lecturersRouter.post("/register", async (req, res, next) => {
+lecturersRouter.post("/register", accountRequestRateLimit, async (req, res, next) => {
   try {
     const input = registerLecturerSchema.parse(req.body);
     const result = await registerLecturer(input);

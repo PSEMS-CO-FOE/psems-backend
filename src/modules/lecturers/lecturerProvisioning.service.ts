@@ -5,7 +5,7 @@ import { LecturerApprovalStatus, Prisma, ProvisioningSubject, Role } from "@pris
 import { prisma } from "../../config/database";
 import { emailQueue } from "../../jobs/emailQueue";
 import { assertRole } from "../shared/authorization";
-import { generateTempPassword } from "../students/tempPassword";
+import { generateTempPassword } from "../shared/tempPassword";
 import { BulkProvisionResult } from "../students/provisioning.service";
 import { csvLecturerRowSchema, CsvLecturerRow } from "./lecturers.schemas";
 

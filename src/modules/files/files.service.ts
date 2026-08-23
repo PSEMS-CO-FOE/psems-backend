@@ -1,3 +1,4 @@
+import path from "path";
 import crypto from "crypto";
 import { CpiPhase } from "@prisma/client";
 import { prisma } from "../../config/database";
@@ -47,7 +48,9 @@ export async function submitProposal(userId: string, cpiId: string, stageId: str
   }
   const isLate = now > windowEnd;
 
-  const objectKey = `cpi/${cpiId}/stage/${stageId}/group/${groupId}/${crypto.randomUUID()}-${file.originalName}`;
+  // A client-supplied name is a label, not a path.
+  const safeName = path.posix.basename(file.originalName.split("\\").join("/")).slice(-120) || "submission";
+  const objectKey = `cpi/${cpiId}/stage/${stageId}/group/${groupId}/${crypto.randomUUID()}-${safeName}`;
   const { storagePath } = await storage.save(objectKey, file.buffer, file.mimeType);
 
   // One current submission per group per stage; resubmitting replaces it.

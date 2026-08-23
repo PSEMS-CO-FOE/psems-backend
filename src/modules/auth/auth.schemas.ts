@@ -22,3 +22,9 @@ export const changePasswordSchema = z.object({
 
 export type LoginInput = z.infer<typeof loginSchema>;
 export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+
+export const passwordResetRequestSchema = z.object({
+  email: z.string().email(),
+  // Free text so the sender can say which account and why.
+  note: z.string().max(500).optional(),
+});
