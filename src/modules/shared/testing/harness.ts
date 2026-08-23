@@ -67,7 +67,6 @@ export function createHarness(prefix: string) {
                   studentId: `${prefix}${key}`,
                   batch: opts.batch ?? "22ENG",
                   department: opts.department ?? "CE",
-                  year: 3,
                 },
               },
             }

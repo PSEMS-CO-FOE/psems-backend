@@ -45,13 +45,13 @@ describe("Week 2 acceptance: student bulk provisioning", () => {
 
   it("provisions valid rows, reports invalid/duplicate rows, queues credential emails", async () => {
     const csv = [
-      "email,fullName,studentId,registrationNumber,batch,department,year",
-      `${PREFIX}s1@psems.dev,Test One,W2J001,,22ENG,Computer Engineering,3`,
-      `${PREFIX}s2@psems.dev,Test Two,W2J002,,22ENG,Computer Engineering,3`,
-      `${PREFIX}s3@psems.dev,Test Three,W2J003,,22ENG,Computer Engineering,3`,
-      "not-an-email,Broken Row,W2J004,,22ENG,Computer Engineering,3", // invalid
-      `${PREFIX}s1@psems.dev,Dup In File,W2J005,,22ENG,Computer Engineering,3`, // duplicate within file
-      `${ADMIN_EMAIL},Already Exists,W2J006,,22ENG,Computer Engineering,3`, // existing account
+      "email,fullName,studentIndex,registrationNumber,batch,department",
+      `${PREFIX}s1@psems.dev,Test One,W2J001,,22ENG,Computer Engineering`,
+      `${PREFIX}s2@psems.dev,Test Two,W2J002,,22ENG,Computer Engineering`,
+      `${PREFIX}s3@psems.dev,Test Three,W2J003,,22ENG,Computer Engineering`,
+      "not-an-email,Broken Row,W2J004,,22ENG,Computer Engineering", // invalid
+      `${PREFIX}s1@psems.dev,Dup In File,W2J005,,22ENG,Computer Engineering`, // duplicate within file
+      `${ADMIN_EMAIL},Already Exists,W2J006,,22ENG,Computer Engineering`, // existing account
     ].join("\n");
 
     const token = await loginToken(ADMIN_EMAIL, ADMIN_PASSWORD);
@@ -89,9 +89,27 @@ describe("Week 2 acceptance: student bulk provisioning", () => {
     expect(statusRes.body.total).toBe(3);
   });
 
+  // Sheets already prepared by the faculty office must keep working.
+  it("still accepts the legacy studentId header", async () => {
+    const csv = [
+      "email,fullName,studentId,registrationNumber,batch,department",
+      `${PREFIX}legacy@psems.dev,Legacy Header,W2J900,,22ENG,Computer Engineering`,
+    ].join("\n");
+
+    const token = await loginToken(ADMIN_EMAIL, ADMIN_PASSWORD);
+    const res = await request(app)
+      .post("/students/bulk-provision")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("file", Buffer.from(csv), "students.csv");
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).toBe(1);
+    expect(await prisma.student.findUnique({ where: { studentId: "W2J900" } })).not.toBeNull();
+  });
+
   it("rejects non-admin (403) and unauthenticated (401) upload attempts", async () => {
     const studentToken = await loginToken(NON_ADMIN_EMAIL, NON_ADMIN_PASSWORD);
-    const csv = "email,fullName,studentId,department,year\n";
+    const csv = "email,fullName,studentIndex,department\n";
 
     const forbidden = await request(app)
       .post("/students/bulk-provision")

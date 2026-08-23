@@ -1,5 +1,15 @@
 # PSEMS Backend — Context for Claude Code
 
+
+## Student provisioning: `year` dropped, `studentId` renamed to `studentIndex` (2026-08-23)
+
+`tsc` + lint + `jest` clean — **135 tests / 17 suites**. Migration `20260823120000_drop_student_year` written and applied.
+
+- **`Student.year` is gone.** It was written once at provisioning and read by nothing: no query filtered on it, no endpoint returned it (`grep "year: true"` → zero), no screen showed it. It was also wrong within twelve months, because a student advances and nothing updated the column. **`batch` is the durable key** — fixed for life, and what actually decides course visibility. Year of study is derivable from batch plus the current date if it is ever wanted.
+- **The CSV column `studentId` is now `studentIndex`.** The value is the university index number, and calling it an id invited confusion with a database key. **`studentIndex`, `indexNumber` and the original `studentId` are all accepted**, so sheets the faculty office already prepared keep loading — covered by its own test.
+- **The database column stays `studentId`.** Renaming it would touch every query that joins on it, the roster and the mark sheet, for no behavioural gain. The meaning is documented on the model instead.
+- Header is now `email,fullName,studentIndex,registrationNumber,batch,department`.
+
 ## What this is
 Backend for PSEMS (Project Scoring, Evaluation & Management System) — a CO3554 university project (5 credits) that must launch as a **real single-department faculty pilot by end of September 2026**. Full spec is in `docs/` (read `PSEMS_Comprehensive_Specification_v2.docx` for full detail — roles, 12-step CPI lifecycle, DB schema, ML endpoints; `PSEMS_Delivery_Roadmap.md` for the week-by-week build plan).
 
@@ -76,7 +86,7 @@ Also confirmed by design, not bugs: submission deadlines are soft (late accepted
 - **`passMarkPercent`** on the policy. The CA sheet flags and counts students below it. **Coordinator-facing only, permanently** — being repeated is a formal decision the department makes and communicates, not a verdict PSEMS announces from a number. No flag exists to turn this on for students.
 - **`targetGroupSize`** on the policy, and **`allowIndividualParticipation` now defaults to true**. A batch rarely divides evenly, so the student left over must still be able to proceed, and a group over or under the target is flagged on the roster rather than refused — the same warn-not-block rule the scheduling conflicts and late submissions already follow.
 - **`PUT /evaluations/stage-weights`** takes every stage's weight at once and validates the sum. Weights were locked out of the patch path once submissions existed, so on a two-semester module the first semester's report upload froze the credit split. Refused once a `FinalMark` exists, matching Wave 1's rule that aggregation, not approval, is the point of no return.
-- **The student CSV gained `batch`** (required) — header is now `email,fullName,studentId,registrationNumber,batch,department,year`.
+- **The student CSV gained `batch`** (required) — header is now `email,fullName,studentIndex,registrationNumber,batch,department`. (`year` dropped and `studentId` renamed to `studentIndex` on 2026-08-23; see the entry at the top.)
 - `visibility.test.ts` covers all of it: batch filtering, drafts, archived courses staying visible to those who joined, case-and-space normalising, request → approve → access, pending and rejected granting nothing, an approved student starting after registration closed while a normal student cannot, and the roster including a late joiner.
 
 **The roster tests were not isolated, and only a parallel run showed it.** `getCourseRoster` looks students up by **batch and department**, but the shared harness isolates suites by **email prefix only** — batch and department default to the same values in all 15 suites. Run with `--runInBand` they passed; run by `npm test` (which is plain `jest`, so parallel — as CI runs it) the roster counted every other suite's students and four assertions failed. `visibility.test.ts` now uses its own `VIS22ENG` / `VIS21ENG` batches and a `CE-VIS` department, and looks rows up by index number rather than position. **`MakeUserOptions.batch` carries a warning**, because any future test that queries by batch or department will hit the same thing.
