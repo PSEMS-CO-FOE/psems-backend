@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";
+import { loginRateLimit } from "../../middleware/rateLimit";
 import { changePasswordSchema, loginSchema } from "./auth.schemas";
 import * as authService from "./auth.service";
 import { REFRESH_COOKIE_MAX_AGE_MS, REFRESH_COOKIE_NAME, refreshCookieOptions } from "./tokens";
 
 export const authRouter = Router();
 
-authRouter.post("/login", async (req, res, next) => {
+authRouter.post("/login", loginRateLimit, async (req, res, next) => {
   try {
     const { email, password } = loginSchema.parse(req.body);
     const result = await authService.login(email, password);
