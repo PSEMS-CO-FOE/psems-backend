@@ -1,4 +1,5 @@
 import bcrypt from "bcrypt";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/database";
 import {
   consumeRefreshToken,
@@ -24,6 +25,11 @@ export async function login(email: string, password: string) {
   const passwordMatches = await bcrypt.compare(password, user.passwordHash);
   if (!passwordMatches) {
     throw new AuthError(401, "Invalid email or password");
+  }
+
+  // After password verification, so account state is not probeable.
+  if (user.suspendedAt) {
+    throw new AuthError(403, "This account has been suspended — contact your administrator");
   }
 
   // Checked only AFTER password verification: reporting approval status on a
@@ -84,6 +90,11 @@ export async function refreshSession(refreshTokenJti: string) {
     throw new AuthError(401, "User no longer exists");
   }
 
+  // Ends a session in progress, within one access-token lifetime.
+  if (user.suspendedAt) {
+    throw new AuthError(403, "This account has been suspended — contact your administrator");
+  }
+
   const accessToken = signAccessToken({ user_id: user.id, role: user.role, email: user.email });
   const newRefreshToken = await issueRefreshToken(user.id);
 
@@ -99,4 +110,21 @@ export async function refreshSession(refreshTokenJti: string) {
 
 export async function logout(refreshTokenJti: string) {
   await revokeRefreshToken(refreshTokenJti);
+}
+
+// Unauthenticated by necessity, and the reply never varies, so it cannot be used
+// to discover which addresses have accounts.
+export async function requestPasswordReset(email: string, note?: string) {
+  const user = await prisma.user.findUnique({ where: { email }, select: { id: true } });
+
+  try {
+    await prisma.passwordResetRequest.create({
+      data: { email, note: note ?? null, userId: user?.id ?? null },
+    });
+  } catch (err) {
+    // One PENDING request per address; a second ask is the same ask.
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2002") {
+      throw err;
+    }
+  }
 }

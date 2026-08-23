@@ -16,6 +16,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts",
     "admin:create": "tsx src/scripts/createAdmin.ts",
+    "superadmin:create": "tsx src/scripts/createSuperAdmin.ts",
     "prisma:studio": "prisma studio"
   },
   "repository": {

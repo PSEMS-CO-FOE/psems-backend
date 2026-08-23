@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";
-import { loginRateLimit } from "../../middleware/rateLimit";
-import { changePasswordSchema, loginSchema } from "./auth.schemas";
+import { accountRequestRateLimit, loginRateLimit } from "../../middleware/rateLimit";
+import { changePasswordSchema, loginSchema, passwordResetRequestSchema } from "./auth.schemas";
 import * as authService from "./auth.service";
 import { REFRESH_COOKIE_MAX_AGE_MS, REFRESH_COOKIE_NAME, refreshCookieOptions } from "./tokens";
 
@@ -69,6 +69,19 @@ authRouter.post("/logout", async (req, res, next) => {
     }
     res.clearCookie(REFRESH_COOKIE_NAME, refreshCookieOptions);
     res.json({ message: "Logged out" });
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Public: a locked-out account cannot authenticate to ask for help.
+authRouter.post("/password-reset-request", accountRequestRateLimit, async (req, res, next) => {
+  try {
+    const { email, note } = passwordResetRequestSchema.parse(req.body);
+    await authService.requestPasswordReset(email, note);
+    return res.json({
+      message: "If that account exists, an administrator has been asked to reset it.",
+    });
   } catch (err) {
     return next(err);
   }

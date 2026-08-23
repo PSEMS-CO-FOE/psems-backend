@@ -262,23 +262,32 @@ model User {
   createdAt           DateTime @default(now()) @map("created_at")
   updatedAt           DateTime @updatedAt @map("updated_at")
 
-  student              Student?
-  lecturer             Lecturer?
-  createdCpis          CourseInstance[]      @relation("CpiCreatedBy")
-  auditLogs            AuditLog[]
-  provisioningLogs     ProvisioningLog[]
-  postedIdeas          ProjectIdea[]
-  notifications        Notification[]
-  panelSeats           SessionPanelist[]     @relation("PanelistUser")
-  panelSeatsAdded      SessionPanelist[]     @relation("PanelistAddedBy")
-  guestsInvited        GuestPanelist[]       @relation("GuestInvitedBy")
-  sessionReviews       SessionReview[]       @relation("SessionReviewer")
-  markPublications     MarkPublication[]     @relation("MarksPublishedBy")
-  joinRequestDecisions CourseJoinRequest[]   @relation("JoinRequestDecidedBy")
-  pooledShareDecisions PooledShareDecision[] @relation("PooledShareDecidedBy")
-  profile              UserProfile?
-  supervisorDecisions  SupervisorRequest[]   @relation("SupervisorRequestDecidedBy")
+  suspendedAt     DateTime? @map("suspended_at")
+  suspendedReason String?   @map("suspended_reason")
+  suspendedById   String?   @map("suspended_by_id")
 
+  student               Student?
+  lecturer              Lecturer?
+  createdCpis           CourseInstance[]       @relation("CpiCreatedBy")
+  auditLogs             AuditLog[]
+  provisioningLogs      ProvisioningLog[]
+  postedIdeas           ProjectIdea[]
+  notifications         Notification[]
+  panelSeats            SessionPanelist[]      @relation("PanelistUser")
+  panelSeatsAdded       SessionPanelist[]      @relation("PanelistAddedBy")
+  guestsInvited         GuestPanelist[]        @relation("GuestInvitedBy")
+  sessionReviews        SessionReview[]        @relation("SessionReviewer")
+  markPublications      MarkPublication[]      @relation("MarksPublishedBy")
+  joinRequestDecisions  CourseJoinRequest[]    @relation("JoinRequestDecidedBy")
+  pooledShareDecisions  PooledShareDecision[]  @relation("PooledShareDecidedBy")
+  profile               UserProfile?
+  supervisorDecisions   SupervisorRequest[]    @relation("SupervisorRequestDecidedBy")
+  suspendedBy           User?                  @relation("UserSuspension", fields: [suspendedById], references: [id], onDelete: SetNull)
+  suspensionsIssued     User[]                 @relation("UserSuspension")
+  passwordResetRequests PasswordResetRequest[] @relation("PasswordResetSubject")
+  passwordResetsHandled PasswordResetRequest[] @relation("PasswordResetHandledBy")
+
+  @@index([suspendedById])
   @@map("users")
 }
 
@@ -1322,4 +1331,34 @@ model Notification {
 
   @@index([recipientUserId, readAt])
   @@map("notifications")
+}
+
+// A person locked out cannot authenticate, so the only way to ask for help
+// through the product is an unauthenticated request that a Super Admin reads.
+enum PasswordResetRequestStatus {
+  PENDING
+  COMPLETED
+  DISMISSED
+}
+
+model PasswordResetRequest {
+  id     String                     @id @default(uuid())
+  // Stored as typed, and resolved to a user only when one matches. A request
+  // for an address that has no account is kept rather than dropped: it is how a
+  // mistyped address shows up as a mistyped address instead of as silence.
+  email  String
+  userId String?                    @map("user_id")
+  note   String?
+  status PasswordResetRequestStatus @default(PENDING)
+
+  createdAt   DateTime  @default(now()) @map("created_at")
+  handledAt   DateTime? @map("handled_at")
+  handledById String?   @map("handled_by_id")
+
+  user      User? @relation("PasswordResetSubject", fields: [userId], references: [id], onDelete: Cascade)
+  handledBy User? @relation("PasswordResetHandledBy", fields: [handledById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([userId])
+  @@map("password_reset_requests")
 }

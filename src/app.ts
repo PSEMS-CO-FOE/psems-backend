@@ -24,18 +24,18 @@ import { schedulingRouter } from "./modules/scheduling/scheduling.routes";
 import { scoringRouter } from "./modules/scoring/scoring.routes";
 import { selectionRouter } from "./modules/selection/selection.routes";
 import { studentsRouter } from "./modules/students/students.routes";
+import { superAdminRouter } from "./modules/superAdmin/superAdmin.routes";
 import { usersRouter } from "./modules/users/users.routes";
 
 export const app = express();
 
-// Trailing slashes are stripped because an Origin header never carries one, and
-// a stray slash in the env var fails every request with an opaque CORS error.
+// An Origin header never carries a trailing slash; a stray one in the env var
+// would fail every request with an opaque CORS error.
 const allowedOrigins = env.CORS_ORIGINS?.split(",")
   .map((origin) => origin.trim().replace(/\/$/, ""))
   .filter(Boolean);
 
-// Behind a TLS-terminating proxy in production; without this Express reads every
-// request as plain HTTP.
+// Behind a TLS-terminating proxy in production.
 app.set("trust proxy", 1);
 app.use(helmet());
 // Unset CORS_ORIGINS reflects any origin — acceptable in dev only.
@@ -49,6 +49,7 @@ app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/auth", authRouter);
 app.use("/users", usersRouter);
 app.use("/students", studentsRouter);
+app.use("/super-admin", superAdminRouter);
 app.use("/lecturers", lecturersRouter);
 app.use("/notifications", notificationsRouter);
 app.use("/profiles", profilesRouter);
