@@ -208,6 +208,37 @@ describe("Week 4: idea visibility — Supervisor-Led", () => {
     const coordPost = await request(app).post(`/courses/${cpiId}/ideas`).set(as("coord")).send({ title: "X", description: "d" });
     expect(coordPost.status).toBe(403);
   });
+
+  // A group idea with no supervisor is seeking one. It used to need a second,
+  // separate button, so supervisors saw an empty list and the idea sat unseen.
+  it("a student idea advertises itself as seeking a supervisor", async () => {
+    const cpiId = await createCpi("Auto-seek CPI");
+    await formGroups(cpiId);
+
+    await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
+    await request(app).post(`/courses/${cpiId}/supervisors`).set(as("coord")).send({ lecturerUserId: userIds.sup }).expect(201);
+    await request(app).post(`/courses/${cpiId}/supervisors/respond`).set(as("sup")).send({ decision: "ACCEPT" }).expect(200);
+
+    await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
+    const posted = await request(app)
+      .post(`/courses/${cpiId}/ideas`)
+      .set(as("s1"))
+      .send({ title: "SEEKS-A-SUPERVISOR", description: "d" })
+      .expect(201);
+
+    const eoi = await prisma.interestExpression.findFirst({
+      where: { ideaId: posted.body.id, type: "SEEKING_SUPERVISOR" },
+    });
+    expect(eoi).not.toBeNull();
+    expect(eoi!.withdrawnAt).toBeNull();
+
+    // And the supervisor can see it without the group doing anything else.
+    await openPhase(cpiId, CpiPhase.PROJECT_SELECTION);
+    const state = await request(app).get(`/courses/${cpiId}/selection`).set(as("sup")).expect(200);
+    expect(state.body.seekingIdeas.map((i: { idea: { title: string } }) => i.idea.title)).toContain(
+      "SEEKS-A-SUPERVISOR",
+    );
+  });
 });
 
 describe("Week 4: idea visibility + approval — Coordinator-Managed", () => {
