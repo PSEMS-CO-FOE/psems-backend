@@ -4,6 +4,7 @@ import { requireAuth } from "../../middleware/auth";
 import { blockIfPasswordChangeRequired } from "../../middleware/forcePasswordChange";
 import { requirePhase } from "../../middleware/phase";
 import {
+  acceptInterestedGroupSchema,
   ideaRefSchema,
   respondSelectionSchema,
   selectProjectSchema,
@@ -104,6 +105,18 @@ selectionRouter.post("/:selectionId/respond", ...authed, inSelection, async (req
 });
 
 // Read-only state view — not phase-gated.
+// A supervisor awards their idea to one of the interested groups.
+selectionRouter.post("/accept-interest", ...authed, inSelection, async (req, res, next) => {
+  try {
+    const { ideaId, groupId } = acceptInterestedGroupSchema.parse(req.body);
+    return res
+      .status(201)
+      .json(await selection.acceptInterestedGroup(req.user!.user_id, req.params.cpiId, ideaId, groupId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 selectionRouter.get("/", ...authed, async (req, res, next) => {
   try {
     return res.json(await selection.getSelectionState(req.user!.user_id, req.params.cpiId));

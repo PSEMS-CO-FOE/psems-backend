@@ -376,6 +376,75 @@ export async function respondToSelection(
   return updated;
 }
 
+// A supervisor picks one of the groups that registered interest in their idea.
+//
+// The other route round — the group formally selects, the supervisor confirms —
+// still exists. This one exists because several groups usually want the same
+// project, and the choice between them is the supervisor's to make, not
+// something the groups should have to race each other to claim.
+export async function acceptInterestedGroup(
+  userId: string,
+  cpiId: string,
+  ideaId: string,
+  groupId: string,
+) {
+  await loadCpi(cpiId);
+  const lecturerId = await getAcceptedSupervisorLecturerId(userId, cpiId);
+  if (!lecturerId) throw new AuthError(403, "Only an accepted supervisor of this CPI can do this");
+
+  const idea = await loadIdeaInCpi(ideaId, cpiId);
+  const owns = await prisma.ideaSupervisor.findFirst({
+    where: { ideaId, lecturerId, invitationStatus: "ACCEPTED" },
+  });
+  if (!owns) throw new AuthError(403, "That idea is not yours to award");
+
+  const interest = await prisma.interestExpression.findUnique({
+    where: { groupId_ideaId_type: { groupId, ideaId, type: EoiType.GROUP_INTEREST } },
+  });
+  if (!interest || interest.withdrawnAt) {
+    throw new AuthError(409, "That group is not currently interested in this idea");
+  }
+
+  // One live selection per group is enforced by a partial unique index, so a
+  // group already placed elsewhere is refused rather than silently moved.
+  const existing = await prisma.projectSelection.findFirst({
+    where: { groupId, status: { not: SelectionStatus.DECLINED } },
+    include: { idea: { select: { title: true } } },
+  });
+  if (existing) {
+    throw new AuthError(409, `That group already has "${existing.idea.title}"`);
+  }
+
+  const selection = await prisma.projectSelection.create({
+    data: {
+      courseInstanceId: cpiId,
+      groupId,
+      ideaId,
+      supervisorLecturerId: lecturerId,
+      status: SelectionStatus.ACCEPTED,
+      respondedAt: new Date(),
+    },
+    include: { group: { select: { id: true, name: true } }, idea: { select: { title: true } } },
+  });
+
+  const members = await prisma.groupMember.findMany({
+    where: { groupId, status: "ACCEPTED" },
+    include: { student: { select: { userId: true } } },
+  });
+  await notifyMany(
+    members.map((m) => m.student.userId),
+    {
+      type: "SELECTION_ACCEPTED",
+      title: "Your project was confirmed",
+      body: `"${idea.title}" is confirmed for your group.`,
+      courseInstanceId: cpiId,
+      email: true,
+    },
+  );
+
+  return selection;
+}
+
 // Scoped view of the selection state for the requester.
 export async function getSelectionState(userId: string, cpiId: string) {
   const cpi = await loadCpi(cpiId);

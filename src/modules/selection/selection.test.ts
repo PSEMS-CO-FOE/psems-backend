@@ -294,3 +294,74 @@ describe("Week 5: guards", () => {
     await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s2")).send({ ideaId: supIdea, rank: 1 }).expect(403);
   });
 });
+
+describe("Supervisor picks from the interested groups", () => {
+  it("awards the idea to one interested group, leaving the others free", async () => {
+    const cpiId = await createCpi("Supervisor-picks CPI");
+    await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);
+    const groupA = await createGroup(cpiId, "s1", "Alpha");
+    const groupB = await createGroup(cpiId, "s3", "Beta");
+
+    await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
+    await acceptSupervisor(cpiId, "sup");
+
+    await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
+    const ideaId = await postIdea(cpiId, "sup", "CONTESTED");
+
+    // Both groups want the same project.
+    await openPhase(cpiId, CpiPhase.PROJECT_SELECTION);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId }).expect(201);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s3")).send({ ideaId }).expect(201);
+
+    // The supervisor chooses, with no formal selection from either group.
+    const awarded = await request(app)
+      .post(`/courses/${cpiId}/selection/accept-interest`)
+      .set(as("sup"))
+      .send({ ideaId, groupId: groupA });
+    expect(awarded.status).toBe(201);
+    expect(awarded.body.status).toBe("ACCEPTED");
+
+    // The group that missed out keeps its interest and stays free.
+    const other = await prisma.interestExpression.findFirst({
+      where: { groupId: groupB, ideaId, type: "GROUP_INTEREST" },
+    });
+    expect(other!.withdrawnAt).toBeNull();
+    expect(await prisma.projectSelection.findFirst({ where: { groupId: groupB } })).toBeNull();
+
+    // One live selection per group.
+    const twice = await request(app)
+      .post(`/courses/${cpiId}/selection/accept-interest`)
+      .set(as("sup"))
+      .send({ ideaId, groupId: groupA });
+    expect(twice.status).toBe(409);
+  });
+
+  it("refuses a group with no interest, and a lecturer who does not own the idea", async () => {
+    const cpiId = await createCpi("Supervisor-picks guards CPI");
+    await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);
+    const groupA = await createGroup(cpiId, "s1", "Alpha");
+
+    await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
+    await acceptSupervisor(cpiId, "sup");
+    await acceptSupervisor(cpiId, "sup2");
+
+    await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
+    const ideaId = await postIdea(cpiId, "sup", "MINE-ONLY");
+
+    await openPhase(cpiId, CpiPhase.PROJECT_SELECTION);
+
+    const noInterest = await request(app)
+      .post(`/courses/${cpiId}/selection/accept-interest`)
+      .set(as("sup"))
+      .send({ ideaId, groupId: groupA });
+    expect(noInterest.status).toBe(409);
+
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId }).expect(201);
+
+    const notMine = await request(app)
+      .post(`/courses/${cpiId}/selection/accept-interest`)
+      .set(as("sup2"))
+      .send({ ideaId, groupId: groupA });
+    expect(notMine.status).toBe(403);
+  });
+});
