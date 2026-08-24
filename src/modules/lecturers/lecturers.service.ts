@@ -46,13 +46,15 @@ export async function registerLecturer(input: RegisterLecturerInput) {
 export async function listApprovedLecturers() {
   const lecturers = await prisma.lecturer.findMany({
     where: { approvalStatus: LecturerApprovalStatus.APPROVED },
-    select: { user: { select: { id: true, email: true, fullName: true } } },
+    // Role comes along so callers can tell who is already a coordinator.
+    select: { user: { select: { id: true, email: true, fullName: true, role: true } } },
     orderBy: { user: { fullName: "asc" } },
   });
   return lecturers.map((l) => ({
     userId: l.user.id,
     email: l.user.email,
     fullName: l.user.fullName,
+    role: l.user.role,
   }));
 }
 
