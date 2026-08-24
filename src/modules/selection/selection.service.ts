@@ -393,7 +393,15 @@ export async function getSelectionState(userId: string, cpiId: string) {
   // student ideas seeking a supervisor they could still mark willing on.
   const lecturerId = await getAcceptedSupervisorLecturerId(userId, cpiId);
   if (lecturerId) {
-    const [willingByMe, pendingSelections, seeking] = await Promise.all([
+    // The ideas this lecturer owns or co-supervises — what a group's interest
+    // would be aimed at.
+    const myIdeas = await prisma.ideaSupervisor.findMany({
+      where: { lecturerId, idea: { courseInstanceId: cpiId } },
+      select: { ideaId: true },
+    });
+    const myIdeaIds = myIdeas.map((i) => i.ideaId);
+
+    const [willingByMe, pendingSelections, seeking, interestInMyIdeas] = await Promise.all([
       prisma.interestExpression.findMany({
         where: { courseInstanceId: cpiId, supervisorLecturerId: lecturerId, type: EoiType.SUPERVISOR_WILLING },
         include: eoiInclude,
@@ -406,13 +414,28 @@ export async function getSelectionState(userId: string, cpiId: string) {
         where: { courseInstanceId: cpiId, type: EoiType.SEEKING_SUPERVISOR },
         include: eoiInclude,
       }),
+      // Groups that registered interest in one of this lecturer's ideas. Without
+      // it a supervisor saw nothing until a group made a formal selection, which
+      // is the step expressing interest exists to precede.
+      myIdeaIds.length
+        ? prisma.interestExpression.findMany({
+            where: {
+              courseInstanceId: cpiId,
+              type: EoiType.GROUP_INTEREST,
+              ideaId: { in: myIdeaIds },
+              withdrawnAt: null,
+            },
+            include: eoiInclude,
+            orderBy: { createdAt: "asc" },
+          })
+        : Promise.resolve([]),
     ]);
     // Ideas the supervisor hasn't already marked willing on.
     const willingIdeaIds = new Set(willingByMe.map((w) => w.ideaId));
     const seekingIdeas = seeking
       .filter((s) => !willingIdeaIds.has(s.ideaId))
       .map((s) => ({ ideaId: s.ideaId, idea: s.idea, group: s.group }));
-    return { role: "SUPERVISOR", willingByMe, pendingSelections, seekingIdeas };
+    return { role: "SUPERVISOR", willingByMe, pendingSelections, seekingIdeas, interestInMyIdeas };
   }
 
   // Student: their group's interest, incoming willingness, and current selection.

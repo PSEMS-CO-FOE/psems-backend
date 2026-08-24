@@ -89,6 +89,34 @@ describe("Week 2 acceptance: student bulk provisioning", () => {
     expect(statusRes.body.total).toBe(3);
   });
 
+  // A file whose header ends CRLF and whose rows end LF used to be read as one
+  // giant record, and surfaced as an internal error.
+  it("reads a file with mixed line endings", async () => {
+    const csv =
+      "email,fullName,studentIndex,registrationNumber,batch,department\r\n" +
+      `${PREFIX}mix1@psems.dev,Mixed One,W2J910,,22ENG,Computer Engineering\n` +
+      `${PREFIX}mix2@psems.dev,Mixed Two,W2J911,,22ENG,Computer Engineering\n`;
+
+    const token = await loginToken(ADMIN_EMAIL, ADMIN_PASSWORD);
+    const res = await request(app)
+      .post("/students/bulk-provision")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("file", Buffer.from(csv), "students.csv");
+
+    expect(res.status).toBe(201);
+    expect(res.body.created).toBe(2);
+  });
+
+  it("rejects an unreadable file with 400 rather than 500", async () => {
+    const token = await loginToken(ADMIN_EMAIL, ADMIN_PASSWORD);
+    const res = await request(app)
+      .post("/students/bulk-provision")
+      .set("Authorization", `Bearer ${token}`)
+      .attach("file", Buffer.from('a,b\nunclosed,"quote'), "students.csv");
+
+    expect(res.status).toBe(400);
+  });
+
   // Sheets already prepared by the faculty office must keep working.
   it("still accepts the legacy studentId header", async () => {
     const csv = [

@@ -6,6 +6,7 @@ import { prisma } from "../../config/database";
 import { normalizeBatch } from "../courses/batch";
 import { emailQueue } from "../../jobs/emailQueue";
 import { assertRole } from "../shared/authorization";
+import { AuthError } from "../auth/auth.service";
 import { csvStudentRowSchema, CsvStudentRow } from "./students.schemas";
 import { generateTempPassword } from "../shared/tempPassword";
 
@@ -25,11 +26,24 @@ export async function bulkProvisionStudents(
   // Service-layer RBAC re-check (spec 9.2 defense-in-depth).
   await assertRole(actorUserId, Role.SYSTEM_ADMIN);
 
-  const rawRows: Record<string, string>[] = parse(csvBuffer, {
-    columns: true, // first line is the header row
-    skip_empty_lines: true,
-    trim: true,
-  });
+  // A spreadsheet saved on one platform and edited on another can end up with
+  // mixed line endings; listing all three stops the parser locking onto the
+  // first one it sees and swallowing the rest of the file as one record.
+  let rawRows: Record<string, string>[];
+  try {
+    rawRows = parse(csvBuffer, {
+      columns: true, // first line is the header row
+      skip_empty_lines: true,
+      trim: true,
+      record_delimiter: ["\r\n", "\n", "\r"],
+      relax_column_count: true,
+    });
+  } catch (err) {
+    // A malformed file is the uploader's to fix, so it is a 400 with the line
+    // number rather than an unexplained 500.
+    const message = err instanceof Error ? err.message : "Could not read that file";
+    throw new AuthError(400, `That CSV could not be read: ${message}`);
+  }
 
   // Validate every row up front; report failures by row number (header = row 1).
   const valid: { row: number; data: CsvStudentRow }[] = [];
