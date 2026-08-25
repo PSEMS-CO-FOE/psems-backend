@@ -93,9 +93,12 @@ export async function expressInterest(userId: string, cpiId: string, ideaId: str
     where: { groupId_ideaId_type: { groupId: group.id, ideaId, type: EoiType.GROUP_INTEREST } },
   });
   // Re-expressing after a withdrawal revives the row rather than colliding with
-  // it, which is why withdrawal is soft.
+  // it, which is why withdrawal is soft. Reviving adds a live interest, so it
+  // counts against the cap exactly as a new one does — withdrawing one, taking
+  // another, then reviving the first would otherwise put the group over.
   if (existing) {
     if (!existing.withdrawnAt) return existing;
+    await assertUnderInterestCap(policy, { groupId: group.id, type: EoiType.GROUP_INTEREST });
     return prisma.interestExpression.update({ where: { id: existing.id }, data: { withdrawnAt: null } });
   }
 

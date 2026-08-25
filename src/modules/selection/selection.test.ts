@@ -174,6 +174,23 @@ describe("Week 5: Supervisor-Led — ranked interest, select, supervisor accepts
       .set(as("s1"))
       .expect(200);
     await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i4 }).expect(201);
+
+    // Reviving the withdrawn one would be a fourth live interest, so it is
+    // refused rather than quietly putting the group over the cap.
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i2 }).expect(409);
+
+    // Free a slot again and the same revival succeeds.
+    await request(app)
+      .delete(`/courses/${cpiId}/selection/interest/${i4}`)
+      .query({ type: "GROUP_INTEREST" })
+      .set(as("s1"))
+      .expect(200);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId: i2 }).expect(201);
+
+    const live = await prisma.interestExpression.count({
+      where: { courseInstanceId: cpiId, type: "GROUP_INTEREST", withdrawnAt: null },
+    });
+    expect(live).toBe(3);
   });
 });
 
