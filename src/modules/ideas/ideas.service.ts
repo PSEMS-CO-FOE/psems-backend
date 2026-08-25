@@ -1,4 +1,4 @@
-import { IdeaApprovalStatus, IdeaAuthorType, IdeaVisibility } from "@prisma/client";
+import { EoiType, IdeaApprovalStatus, IdeaAuthorType, IdeaVisibility } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
@@ -82,15 +82,30 @@ export async function postIdea(userId: string, cpiId: string, title: string, des
         throw new AuthError(409, `Your group may post at most ${policy.maxIdeasPerGroup} idea(s)`);
       }
     }
-    return prisma.projectIdea.create({
+    const pendingApproval = policy.requireStudentIdeaApproval;
+    const idea = await prisma.projectIdea.create({
       data: {
         ...base,
         authorType: IdeaAuthorType.STUDENT,
         visibility: IdeaVisibility.GROUP_RESTRICTED,
         groupId,
-        approvalStatus: policy.requireStudentIdeaApproval ? IdeaApprovalStatus.PENDING : null,
+        approvalStatus: pendingApproval ? IdeaApprovalStatus.PENDING : null,
       },
     });
+
+    // A group idea with no supervisor is seeking one by definition, so it says
+    // so straight away rather than waiting for a second button nobody finds.
+    // The group can withdraw it. An idea still awaiting the coordinator's
+    // approval is not advertised yet.
+    if (!pendingApproval && policy.interestEnabled) {
+      await prisma.interestExpression.upsert({
+        where: { groupId_ideaId_type: { groupId, ideaId: idea.id, type: EoiType.SEEKING_SUPERVISOR } },
+        update: { withdrawnAt: null },
+        create: { courseInstanceId: cpiId, ideaId: idea.id, type: EoiType.SEEKING_SUPERVISOR, groupId },
+      });
+    }
+
+    return idea;
   }
 
   if (policy.studentIdeasLeaderOnly && (await getStudentGroupId(userId, cpiId))) {

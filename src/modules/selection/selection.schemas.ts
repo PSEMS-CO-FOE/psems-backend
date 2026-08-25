@@ -17,3 +17,8 @@ export const respondSelectionSchema = z.object({ decision: z.enum(["ACCEPT", "DE
 export const withdrawInterestSchema = z.object({
   type: z.enum(["GROUP_INTEREST", "SEEKING_SUPERVISOR", "SUPERVISOR_WILLING", "LECTURER_INTEREST", "CO_SUPERVISION_INTEREST"]),
 });
+
+export const acceptInterestedGroupSchema = z.object({
+  ideaId: z.string().uuid(),
+  groupId: z.string().uuid(),
+});
