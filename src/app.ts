@@ -12,6 +12,7 @@ import { evaluationsRouter } from "./modules/evaluations/evaluations.routes";
 import { filesRouter } from "./modules/files/files.routes";
 import { groupsRouter } from "./modules/groups/groups.routes";
 import { ideasRouter } from "./modules/ideas/ideas.routes";
+import { mlRouter } from "./modules/ml/ml.routes";
 import { lecturersRouter } from "./modules/lecturers/lecturers.routes";
 import { marksRouter } from "./modules/marks/marks.routes";
 import { notificationsRouter } from "./modules/notifications/notifications.routes";
@@ -47,6 +48,7 @@ app.use(auditLogger); // after body parsing (needs req.body to hash), before all
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 
 app.use("/auth", authRouter);
+app.use("/ml", mlRouter);
 app.use("/users", usersRouter);
 app.use("/students", studentsRouter);
 app.use("/super-admin", superAdminRouter);
