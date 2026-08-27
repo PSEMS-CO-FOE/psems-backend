@@ -2,6 +2,7 @@ import { EoiType, IdeaApprovalStatus, IdeaAuthorType, IdeaVisibility } from "@pr
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
+import { flagSimilarityInBackground } from "../ml/ml.service";
 import { notify, notifyMany } from "../notifications/notifications.service";
 import {
   getAcceptedSupervisorLecturerId,
@@ -14,6 +15,14 @@ import {
 // capacity, with each branch enabled by policy rather than by CpiMode — so a
 // coordinator-run course can still let supervisors post, and vice versa.
 export async function postIdea(userId: string, cpiId: string, title: string, description: string) {
+  const idea = await createIdea(userId, cpiId, title, description);
+  // Similarity runs after the write and off the request path: a slow or absent
+  // ML service must not delay or fail posting an idea.
+  flagSimilarityInBackground(idea.id, title, description);
+  return idea;
+}
+
+async function createIdea(userId: string, cpiId: string, title: string, description: string) {
   const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId } });
   if (!cpi) {
     throw new AuthError(404, "CPI not found");
