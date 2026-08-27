@@ -151,26 +151,55 @@ export async function updateMyProfile(userId: string, input: UpdateProfileInput)
 // Find supervisors by research area — the reason interests are tagged rather
 // than left as free text in the About section.
 export async function searchProfiles(query: { area?: string; department?: string; q?: string }) {
-  const profiles = await prisma.userProfile.findMany({
+  // Searches people, not profile rows. Querying `userProfile` meant anyone who
+  // had never opened Edit my profile did not exist as far as the directory and
+  // the search box were concerned — which, on a new deployment, is everyone.
+  const users = await prisma.user.findMany({
     where: {
-      ...(query.department ? { department: { contains: query.department, mode: "insensitive" } } : {}),
-      ...(query.area ? { interests: { some: { area: { contains: query.area, mode: "insensitive" } } } } : {}),
+      // Guests hold no account; suspended people should not be offered as
+      // supervisors or teammates.
+      suspendedAt: null,
+      ...(query.department ? { profile: { department: { contains: query.department, mode: "insensitive" } } } : {}),
+      ...(query.area
+        ? { profile: { interests: { some: { area: { contains: query.area, mode: "insensitive" } } } } }
+        : {}),
       ...(query.q
         ? {
             OR: [
-              { headline: { contains: query.q, mode: "insensitive" } },
-              { about: { contains: query.q, mode: "insensitive" } },
-              { user: { fullName: { contains: query.q, mode: "insensitive" } } },
+              { fullName: { contains: query.q, mode: "insensitive" } },
+              // An email is what people actually remember about a colleague.
+              { email: { contains: query.q, mode: "insensitive" } },
+              { profile: { headline: { contains: query.q, mode: "insensitive" } } },
+              { profile: { about: { contains: query.q, mode: "insensitive" } } },
             ],
           }
         : {}),
     },
-    include: profileInclude,
+    select: {
+      id: true,
+      email: true,
+      fullName: true,
+      role: true,
+      profile: { include: { interests: { orderBy: { area: "asc" } }, outputs: { orderBy: [{ year: "desc" }, { title: "asc" }] } } },
+    },
     take: 100,
-    orderBy: { user: { fullName: "asc" } },
+    orderBy: [{ fullName: "asc" }, { email: "asc" }],
   });
 
-  return profiles;
+  // The shape callers already read, with empty values where no profile exists.
+  return users.map((u) => ({
+    id: u.profile?.id ?? u.id,
+    userId: u.id,
+    headline: u.profile?.headline ?? null,
+    about: u.profile?.about ?? null,
+    department: u.profile?.department ?? null,
+    designation: u.profile?.designation ?? null,
+    contactEmail: u.profile?.contactEmail ?? null,
+    links: u.profile?.links ?? null,
+    interests: u.profile?.interests ?? [],
+    outputs: u.profile?.outputs ?? [],
+    user: { id: u.id, email: u.email, fullName: u.fullName, role: u.role },
+  }));
 }
 
 export function listResearchAreas() {
