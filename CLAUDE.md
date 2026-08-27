@@ -10,6 +10,19 @@
 - **The database column stays `studentId`.** Renaming it would touch every query that joins on it, the roster and the mark sheet, for no behavioural gain. The meaning is documented on the model instead.
 - Header is now `email,fullName,studentIndex,registrationNumber,batch,department`.
 
+
+## Search, coordinator demotion, and the supervisor's interest list (2026-08-25)
+
+`tsc` + lint + `jest` clean — **142 tests / 18 suites**.
+
+- **People search matched nothing, in every role.** `searchProfiles` queried `userProfile`, so anyone who had never opened Edit my profile did not exist to the directory or the search box. Production had **11 users and 0 profile rows** — so it matched nobody, always. It searches `user` now, left-joining the profile, and email was added to the searchable fields because that is what people remember about a colleague.
+- **`POST /users/:id/revoke-coordinator`** undoes an accidental promotion. Refused with a 409 while they still coordinate a course, because the course's ownership and every phase gate hang off that role.
+- **Promotion locked a lecturer out of everything they supervised.** The data was never lost — `listLecturerCpis` reads the `Lecturer` row and the `cpi_supervisors` junction, not `User.role` — but the frontend's `/lecturer` route was gated to `LECTURER` alone and the coordinator rail had no link to it. Fixed on the frontend; no backend change.
+- **A student idea now flags itself as `SEEKING_SUPERVISOR` when posted**, unless it is awaiting coordinator approval or interest is disabled. It previously needed a second, separate button, so ideas sat unseen and supervisors saw an empty list.
+- **`POST /selection/accept-interest`** lets a supervisor award their idea to one of the interested groups, with no formal selection from the group. Several groups usually want the same project and the choice is the supervisor's. The older route (group selects, supervisor confirms) still exists for `selectionConfirmedBy` and Coordinator-managed courses.
+- **`getSelectionState`'s supervisor branch returns `interestInMyIdeas`**, each carrying `placedOn` when that group already has a project — otherwise the screen offers to take a group that is already spoken for.
+- **A revived interest now counts against the course's cap.** Withdrawal is soft, and re-expressing cleared `withdrawnAt` without re-checking the cap, so withdraw-one-take-another-revive-the-first put a group over its limit.
+
 ## What this is
 Backend for PSEMS (Project Scoring, Evaluation & Management System) — a CO3554 university project (5 credits) that must launch as a **real single-department faculty pilot by end of September 2026**. Full spec is in `docs/` (read `PSEMS_Comprehensive_Specification_v2.docx` for full detail — roles, 12-step CPI lifecycle, DB schema, ML endpoints; `PSEMS_Delivery_Roadmap.md` for the week-by-week build plan).
 
@@ -126,7 +139,7 @@ Also confirmed by design, not bugs: submission deadlines are soft (late accepted
 - **A student pre-publish now gets 200, not 403.** Per-stage publishing means "published" is no longer one yes/no — a 403 cannot say "the proposal is out but the demo is not". `getMarks` returns the visible stages plus `pendingStages` naming the rest. **This is a deliberate breaking change to the Week 8 contract**; the frontend no longer treats 403 as an empty state.
 - **A student sees only their own breakdown**, never a group-mate's individual marks, even though both hang off the same group.
 - **The CA sheet** (`GET /marks/sheet`, coordinator only) is one row per student with a weight row summing to 1.00, one column per stage, a total, and **zero totals flagged rather than dropped** — a zero usually means someone was never scored. Names are stored as one field, so the sheet takes the last word as the surname and initials from the rest; the full name is sent too.
-- ~~**`registrationNumber` is still unpopulated.**~~ **Closed 2026-08-16** — the student CSV now carries it (`email,fullName,studentId,registrationNumber,department,year`, the column optional so older files still load), so the sheet’s second column fills in.
+- ~~**`registrationNumber` is still unpopulated.**~~ **Closed 2026-08-16** — the student CSV now carries it, the column optional so older files still load, so the sheet’s second column fills in. *(Header has since changed twice; see the entry at the top of this file.)*
 - **Sessions now carry their group's accepted members** so a panelist can score per-student criteria without a request per session.
 - `week8.test.ts` renamed **`marks.test.ts`** and rewritten onto the shared harness, covering individual marks, publishing and unpublishing, comments without marks, grades, and the sheet.
 
