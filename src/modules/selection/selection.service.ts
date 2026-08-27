@@ -507,7 +507,31 @@ export async function getSelectionState(userId: string, cpiId: string) {
     const seekingIdeas = seeking
       .filter((s) => !willingIdeaIds.has(s.ideaId))
       .map((s) => ({ ideaId: s.ideaId, idea: s.idea, group: s.group }));
-    return { role: "SUPERVISOR", willingByMe, pendingSelections, seekingIdeas, interestInMyIdeas };
+
+    // A group keeps its interest after being placed, so the list has to say
+    // which ones are already spoken for — otherwise the screen offers to take a
+    // group that already has a project.
+    const interestedGroupIds = interestInMyIdeas
+      .map((e) => e.groupId)
+      .filter((id): id is string => Boolean(id));
+    const placed = interestedGroupIds.length
+      ? await prisma.projectSelection.findMany({
+          where: { groupId: { in: interestedGroupIds }, status: { not: SelectionStatus.DECLINED } },
+          select: { groupId: true, ideaId: true, idea: { select: { title: true } } },
+        })
+      : [];
+    const placedByGroup = new Map(placed.map((s) => [s.groupId, s]));
+
+    const interest = interestInMyIdeas.map((e) => {
+      const taken = e.groupId ? placedByGroup.get(e.groupId) : undefined;
+      return {
+        ...e,
+        // Set when the group already has a project — this one or another.
+        placedOn: taken ? { ideaId: taken.ideaId, title: taken.idea.title } : null,
+      };
+    });
+
+    return { role: "SUPERVISOR", willingByMe, pendingSelections, seekingIdeas, interestInMyIdeas: interest };
   }
 
   // Student: their group's interest, incoming willingness, and current selection.
