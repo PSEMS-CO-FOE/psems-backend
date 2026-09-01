@@ -68,6 +68,11 @@ Also confirmed by design, not bugs: submission deadlines are soft (late accepted
 
 ## Current phase
 
+**The directory, and tests for the search behind it (2026-08-28).** **147 tests / 19 suites green**, tsc + lint clean.
+
+- **`/profiles/search` now leaves administrators out.** The directory exists to find a supervisor or a teammate, and an admin is neither — listing one only invites a request they cannot act on.
+- **It has tests at last.** The directory and the app's top search bar share this endpoint, and it had broken twice unnoticed because nothing covered it. `directory.test.ts` pins that someone who has never opened *Edit my profile* is still findable, that an email matches as well as a name, and that admins and suspended accounts stay out.
+
 **Hosted, and a Super Admin tier, as of 2026-08-23 (committed, not pushed).** **134 tests / 17 suites green**, tsc + lint clean. PSEMS now runs at `psems-foe-usj.tech` (SPA on Vercel) and `api.psems-foe-usj.tech` (this API on Render free), against Supabase Postgres and Supabase Storage. Redis is Render Key Value. **No ML service is deployed** — nothing here calls it; `ML_SERVICE_URL` is declared and read by no module.
 
 **The database was publicly readable and writable, and is the most important thing on this page.** Supabase publishes the `public` schema over PostgREST, reachable with the publishable key, which ships in browsers by design. Tables created by Prisma inherit grants for `anon`/`authenticated` and carry no row-level policy. Verified against the live database: an anonymous request read bcrypt password hashes out of `users`, and a `PATCH` was accepted — any row, including a role change to SUPER_ADMIN. Closed by `restrict_public_schema_access`: RLS on every table plus revoked grants and default privileges, so future tables are not exposed as they are created. The owning role bypasses RLS, so the application is untouched. **Every new migration must enable RLS on the tables it creates** — the lockdown could only cover tables that existed when it ran; `password_reset_requests` does this.
