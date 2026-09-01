@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, Role } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { UpdateProfileInput } from "./profiles.schemas";
@@ -159,6 +159,9 @@ export async function searchProfiles(query: { area?: string; department?: string
       // Guests hold no account; suspended people should not be offered as
       // supervisors or teammates.
       suspendedAt: null,
+      // The directory exists to find a supervisor or a teammate. An admin is
+      // neither, and listing one only invites a request they cannot act on.
+      role: { notIn: [Role.SYSTEM_ADMIN, Role.SUPER_ADMIN] },
       ...(query.department ? { profile: { department: { contains: query.department, mode: "insensitive" } } } : {}),
       ...(query.area
         ? { profile: { interests: { some: { area: { contains: query.area, mode: "insensitive" } } } } }
