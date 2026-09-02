@@ -52,6 +52,41 @@ export function requirePhase(phase: CpiPhase, cpiIdParam = "cpiId") {
   };
 }
 
+/**
+ * Open while ANY of these phases is. Some actions belong to more than one point
+ * in the course — co-supervision is arranged when ideas go up, and again once
+ * selection has paired a supervisor with a group — and gating them to a single
+ * phase shuts them exactly when they are needed.
+ */
+export function requireAnyPhase(phases: CpiPhase[], cpiIdParam = "cpiId") {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const cpiId = req.params[cpiIdParam];
+    if (!cpiId) {
+      return res.status(400).json({ error: `Missing ${cpiIdParam} in route` });
+    }
+
+    if (
+      req.user &&
+      phases.some((phase) => LATE_JOINER_PHASES.includes(phase)) &&
+      (await isApprovedLateJoiner(req.user.user_id, cpiId))
+    ) {
+      return next();
+    }
+
+    const windows = await prisma.cpiTimeline.findMany({
+      where: { courseInstanceId: cpiId, phase: { in: phases } },
+    });
+
+    const now = new Date();
+    if (windows.some((w) => now >= w.startDate && now <= w.endDate)) return next();
+
+    return res.status(403).json({
+      error: `This needs one of these phases to be open: ${phases.join(", ")}`,
+      code: "PHASE_CLOSED",
+    });
+  };
+}
+
 async function isApprovedLateJoiner(userId: string, cpiId: string): Promise<boolean> {
   const student = await prisma.student.findUnique({ where: { userId }, select: { id: true } });
   if (!student) return false;

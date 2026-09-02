@@ -2,7 +2,7 @@ import { CpiPhase, Role } from "@prisma/client";
 import { Router } from "express";
 import { requireAuth } from "../../middleware/auth";
 import { blockIfPasswordChangeRequired } from "../../middleware/forcePasswordChange";
-import { requirePhase } from "../../middleware/phase";
+import { requireAnyPhase, requirePhase } from "../../middleware/phase";
 import { requireRole } from "../../middleware/role";
 import {
   coSupervisorSchema,
@@ -16,6 +16,15 @@ export const ideasRouter = Router({ mergeParams: true });
 
 const authed = [requireAuth, blockIfPasswordChangeRequired];
 const inIdeaAnnouncement = requirePhase(CpiPhase.IDEA_ANNOUNCEMENT);
+
+// Co-supervision is arranged twice: when ideas go up, and again once selection
+// has paired a supervisor with a group. Gating it to idea announcement alone
+// closed it at the point a group's own supervisor first needed it.
+const whileSupervisionIsSettled = requireAnyPhase([
+  CpiPhase.IDEA_ANNOUNCEMENT,
+  CpiPhase.PROJECT_SELECTION,
+  CpiPhase.PROJECT_REGISTRATION,
+]);
 
 // Posting is open to several actor types (supervisor/coordinator/student); the
 // service authorizes by capacity, so no requireRole here — just phase-gate it.
@@ -59,7 +68,7 @@ ideasRouter.post("/:ideaId/request-revision", ...authed, inIdeaAnnouncement, asy
 
 // Co-supervisors are named by the idea's own supervisor and must accept, so a
 // group always sees who has actually agreed to take them on.
-ideasRouter.post("/:ideaId/co-supervisors", ...authed, inIdeaAnnouncement, async (req, res, next) => {
+ideasRouter.post("/:ideaId/co-supervisors", ...authed, whileSupervisionIsSettled, async (req, res, next) => {
   try {
     const { lecturerUserId } = coSupervisorSchema.parse(req.body);
     return res
@@ -70,7 +79,7 @@ ideasRouter.post("/:ideaId/co-supervisors", ...authed, inIdeaAnnouncement, async
   }
 });
 
-ideasRouter.post("/:ideaId/co-supervisors/respond", ...authed, inIdeaAnnouncement, async (req, res, next) => {
+ideasRouter.post("/:ideaId/co-supervisors/respond", ...authed, whileSupervisionIsSettled, async (req, res, next) => {
   try {
     const { decision } = respondCoSupervisorSchema.parse(req.body);
     return res.json(
@@ -81,7 +90,7 @@ ideasRouter.post("/:ideaId/co-supervisors/respond", ...authed, inIdeaAnnouncemen
   }
 });
 
-ideasRouter.delete("/:ideaId/co-supervisors/:coSupervisorId", ...authed, inIdeaAnnouncement, async (req, res, next) => {
+ideasRouter.delete("/:ideaId/co-supervisors/:coSupervisorId", ...authed, whileSupervisionIsSettled, async (req, res, next) => {
   try {
     return res.json(
       await ideas.removeIdeaCoSupervisor(

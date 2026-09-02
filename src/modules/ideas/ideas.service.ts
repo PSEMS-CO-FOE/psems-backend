@@ -1,4 +1,4 @@
-import { EoiType, IdeaApprovalStatus, IdeaAuthorType, IdeaVisibility } from "@prisma/client";
+import { EoiType, IdeaApprovalStatus, IdeaAuthorType, IdeaVisibility, SelectionStatus } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
@@ -162,16 +162,41 @@ const ideaInclude = {
   },
 } as const;
 
+/**
+ * Who may change an idea's supervisor list. The idea's primary supervisor, and
+ * three cases that are the same thing wearing a different hat:
+ *
+ * - a coordinator-posted idea has no supervisor row at all, so the course owner
+ *   would otherwise be locked out of an idea they wrote themselves;
+ * - a group's own idea gets its supervisor through selection, which records the
+ *   lecturer on the selection, not on the idea — so the person actually
+ *   supervising it was not its supervisor as far as this check was concerned;
+ * - the coordinator can always act on their own course.
+ */
 async function loadIdeaForAuthor(userId: string, cpiId: string, ideaId: string) {
   const idea = await prisma.projectIdea.findUnique({ where: { id: ideaId }, include: { supervisors: true } });
   if (!idea || idea.courseInstanceId !== cpiId) throw new AuthError(404, "Idea not found in this CPI");
 
+  const cpi = await prisma.courseInstance.findUnique({ where: { id: cpiId }, select: { createdById: true } });
+  if (cpi?.createdById === userId) return idea;
+
   const lecturer = await prisma.lecturer.findUnique({ where: { userId } });
-  const isPrimary = Boolean(
-    lecturer && idea.supervisors.some((sup) => sup.lecturerId === lecturer.id && sup.isPrimary),
-  );
-  if (!isPrimary) throw new AuthError(403, "Only the idea's own supervisor can change its supervisor list");
-  return idea;
+  if (!lecturer) throw new AuthError(403, "Only the idea's own supervisor can change its supervisor list");
+
+  if (idea.supervisors.some((sup) => sup.lecturerId === lecturer.id && sup.isPrimary)) return idea;
+
+  // Supervising the project through selection is supervising the idea.
+  const supervisingIt = await prisma.projectSelection.findFirst({
+    where: {
+      ideaId,
+      supervisorLecturerId: lecturer.id,
+      status: { not: SelectionStatus.DECLINED },
+    },
+    select: { id: true },
+  });
+  if (supervisingIt) return idea;
+
+  throw new AuthError(403, "Only the idea's own supervisor can change its supervisor list");
 }
 
 // Name a co-supervisor on an idea. They are invited, not assumed — the invite
