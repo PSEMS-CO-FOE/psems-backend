@@ -43,7 +43,9 @@ export interface ProposalAnalysis {
 }
 
 export function mlEnabled(): boolean {
-  return Boolean(env.ML_SERVICE_URL);
+  // Off in tests: the suite must not depend on an external service, and a
+  // fire-and-forget call outliving a test logs after teardown and fails it.
+  return Boolean(env.ML_SERVICE_URL) && env.NODE_ENV !== "test";
 }
 
 async function call<T>(path: string, init?: RequestInit, timeoutMs = TIMEOUT_MS): Promise<T | null> {
