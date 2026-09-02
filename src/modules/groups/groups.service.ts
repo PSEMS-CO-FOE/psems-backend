@@ -76,10 +76,6 @@ export async function ensureSoloGroup(userId: string, cpiId: string) {
   if (!individualAllowed) {
     throw new AuthError(409, "This course requires you to join or create a group");
   }
-  if (!policy.autoCreateSoloGroup) {
-    throw new AuthError(409, "Create your group before continuing");
-  }
-
   const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { fullName: true, email: true } });
 
   return prisma.group.create({
