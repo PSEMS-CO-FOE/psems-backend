@@ -78,6 +78,16 @@ export async function analyzeSubmission(userId: string, cpiId: string, submissio
     proposal_id: submission.id,
     group_id: submission.groupId,
   });
-  if (!analysis) return { available: false, reason: "ml service unavailable" as const };
+  if (!analysis) {
+    // Distinguish a genuine outage from a failure on this particular document,
+    // so the user is not told the service is down when it is answering.
+    const reachable = (await ml.health()) !== null;
+    return {
+      available: false,
+      reason: reachable
+        ? ("could not analyse this document" as const)
+        : ("ml service unavailable" as const),
+    };
+  }
   return { available: true as const, analysis };
 }
