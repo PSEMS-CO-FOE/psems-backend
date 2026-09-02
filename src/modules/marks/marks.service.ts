@@ -273,9 +273,16 @@ async function buildMarksView(cpiId: string, opts: ViewOptions) {
     }),
   ]);
 
+  // A grade is worked out from the marks behind it, so a stage has to be loaded
+  // whenever EITHER switch is on. Filtering on `marks` alone meant a course
+  // releasing grades only loaded nothing and graded everyone off zero.
   const visibleStageIds = opts.coordinator
     ? stages.map((s) => s.id)
-    : stages.filter((s) => visibilityFor(s.id).marks).map((s) => s.id);
+    : stages.filter((s) => visibilityFor(s.id).marks || visibilityFor(s.id).grades).map((s) => s.id);
+
+  // Loaded for grading is not the same as fit to show. A stage whose marks are
+  // still held back contributes to the grade but its figures stay off screen.
+  const showsFigures = (stageId: string) => opts.coordinator || visibilityFor(stageId).marks;
 
   const [groupMarks, studentMarks] = await Promise.all([
     prisma.finalMark.findMany({
@@ -312,13 +319,15 @@ async function buildMarksView(cpiId: string, opts: ViewOptions) {
       grade: null,
       students: new Map(),
     };
-    entry.stages.push({
-      stageId: stage.id,
-      stageName: stage.name,
-      weight: stage.weight,
-      stageScorePercent: round2(mark.stageScorePercent),
-      weightedContribution: round2(mark.weightedContribution),
-    });
+    if (showsFigures(stage.id)) {
+      entry.stages.push({
+        stageId: stage.id,
+        stageName: stage.name,
+        weight: stage.weight,
+        stageScorePercent: round2(mark.stageScorePercent),
+        weightedContribution: round2(mark.weightedContribution),
+      });
+    }
     entry.overall = round2(entry.overall + mark.weightedContribution);
     byGroup.set(mark.groupId, entry);
   }
@@ -339,16 +348,18 @@ async function buildMarksView(cpiId: string, opts: ViewOptions) {
       overall: 0,
       grade: null,
     };
-    entry.stages.push({
-      stageId: stage.id,
-      stageName: stage.name,
-      weight: stage.weight,
-      groupComponentPercent: round2(mark.groupComponentPercent),
-      individualComponentPercent:
-        mark.individualComponentPercent === null ? null : round2(mark.individualComponentPercent),
-      stageScorePercent: round2(mark.stageScorePercent),
-      weightedContribution: round2(mark.weightedContribution),
-    });
+    if (showsFigures(stage.id)) {
+      entry.stages.push({
+        stageId: stage.id,
+        stageName: stage.name,
+        weight: stage.weight,
+        groupComponentPercent: round2(mark.groupComponentPercent),
+        individualComponentPercent:
+          mark.individualComponentPercent === null ? null : round2(mark.individualComponentPercent),
+        stageScorePercent: round2(mark.stageScorePercent),
+        weightedContribution: round2(mark.weightedContribution),
+      });
+    }
     entry.overall = round2(entry.overall + mark.weightedContribution);
     group.students.set(mark.studentId, entry);
   }
@@ -363,6 +374,10 @@ async function buildMarksView(cpiId: string, opts: ViewOptions) {
   const gradesReleased = opts.coordinator || stages.every((st) => visibilityFor(st.id).grades);
   const showGrade = policy.gradingEnabled && isWholeModule && gradesReleased;
 
+  // The overall total is itself a mark. Releasing grades alone must not hand it
+  // back under another name, so it and everything derived from it are withheld.
+  const marksReleased = opts.coordinator || stages.every((st) => visibilityFor(st.id).marks);
+
   // What these marks add to the module, e.g. 80 out of 100 at a 40% weighting
   // contributes 32 marks.
   const contributionOf = (overall: number) =>
@@ -370,12 +385,14 @@ async function buildMarksView(cpiId: string, opts: ViewOptions) {
 
   const groups = [...byGroup.values()].map((group) => ({
     ...group,
+    overall: marksReleased ? group.overall : null,
     grade: showGrade ? gradeFor(group.overall, bands) : null,
-    contributionToModule: contributionOf(group.overall),
+    contributionToModule: marksReleased ? contributionOf(group.overall) : null,
     students: [...group.students.values()].map((student) => ({
       ...student,
+      overall: marksReleased ? student.overall : null,
       grade: showGrade ? gradeFor(student.overall, bands) : null,
-      contributionToModule: contributionOf(student.overall),
+      contributionToModule: marksReleased ? contributionOf(student.overall) : null,
     })),
   }));
 
@@ -388,9 +405,14 @@ async function buildMarksView(cpiId: string, opts: ViewOptions) {
     gradesReleased,
     // Marks are only part of the picture when they are shown per stage, so the
     // stages a student cannot see yet are named as pending rather than hidden.
+    marksReleased,
+    // Pending means nothing has been released for it yet. A stage showing only a
+    // grade has been released, so naming it as still to come would be wrong.
     pendingStages: opts.coordinator
       ? []
-      : stages.filter((s) => !visibilityFor(s.id).marks).map((s) => ({ stageId: s.id, stageName: s.name })),
+      : stages
+          .filter((s) => !visibilityFor(s.id).marks && !visibilityFor(s.id).grades)
+          .map((s) => ({ stageId: s.id, stageName: s.name })),
     groups,
   };
 }

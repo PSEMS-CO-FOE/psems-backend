@@ -68,6 +68,13 @@ Also confirmed by design, not bugs: submission deadlines are soft (late accepted
 
 ## Current phase
 
+**Grades without marks, and the allocation record (2026-09-02).** **148 tests / 19 suites green**, tsc + lint clean.
+
+- **A grade could be released without its marks, and the result was nonsense.** `publishGrades` has been a column, a service branch and a checkbox in the publish matrix for a while. It could never work: `buildMarksView` chose its stages with `visibilityFor(s.id).marks`, so releasing grades alone loaded **no marks at all** and graded everyone off a total of zero. A stage is now loaded when **either** switch is on; one whose marks are held back contributes to the grade and contributes **no figures**. The overall total and `contributionToModule` go with them — the total is itself a mark, and returning it hands back under another name exactly what was withheld. `marksReleased` says which case the client is in, and `pendingStages` now means "nothing released yet" rather than "marks not released", which called a grades-only stage still to come. **No new field, no migration.** This is the shape a final year project wants: tick the grade, leave marks unticked.
+- **`GET /allocations` returned too little to be a record of anything** — group id and name, and the primary supervisor. `allocationInclude` now carries accepted members with index numbers and the idea's full supervisor list with invitation status, which is what the coordinator's allocation PDF is built from.
+- **`getSelectionState` tells a supervisor when allocations are finalized.** Their screen kept offering to take groups and mark willing after the lock — refused server-side every time, but nothing said so.
+- **A student allowed to work alone always gets their group created.** The `autoCreateSoloGroup` guard only ever produced "Create your group before continuing". The column stays, marked as no longer read, for its own drop migration.
+
 **The directory, and tests for the search behind it (2026-08-28).** **147 tests / 19 suites green**, tsc + lint clean.
 
 - **`/profiles/search` now leaves administrators out.** The directory exists to find a supervisor or a teammate, and an admin is neither — listing one only invites a request they cannot act on.

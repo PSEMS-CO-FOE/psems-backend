@@ -531,7 +531,16 @@ export async function getSelectionState(userId: string, cpiId: string) {
       };
     });
 
-    return { role: "SUPERVISOR", willingByMe, pendingSelections, seekingIdeas, interestInMyIdeas: interest };
+    // Once allocations are locked, choosing is over: the screen has to stop
+    // offering to take groups or mark willing, both of which the server refuses.
+    return {
+      role: "SUPERVISOR",
+      allocationsFinalized: cpi.allocationsFinalizedAt !== null,
+      willingByMe,
+      pendingSelections,
+      seekingIdeas,
+      interestInMyIdeas: interest,
+    };
   }
 
   // Student: their group's interest, incoming willingness, and current selection.
