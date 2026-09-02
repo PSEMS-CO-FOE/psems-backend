@@ -5,7 +5,11 @@ import { env } from "../../config/env";
 // degrades the feature rather than failing the request that triggered it.
 // Disabled entirely when ML_SERVICE_URL is unset.
 
+// Draft assistance runs while a student types, so it must fail fast. Document
+// analysis parses and embeds a whole PDF (~18s for a 23-page proposal) and is
+// user-initiated, so it gets a much longer budget.
 const TIMEOUT_MS = 8_000;
+const ANALYSIS_TIMEOUT_MS = 120_000;
 
 export interface SupervisorSuggestion {
   lecturer_id: string;
@@ -42,10 +46,10 @@ export function mlEnabled(): boolean {
   return Boolean(env.ML_SERVICE_URL);
 }
 
-async function call<T>(path: string, init?: RequestInit): Promise<T | null> {
-  if (!env.ML_SERVICE_URL) return null;
+async function call<T>(path: string, init?: RequestInit, timeoutMs = TIMEOUT_MS): Promise<T | null> {
+  if (!mlEnabled()) return null;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${env.ML_SERVICE_URL}${path}`, {
       ...init,
@@ -90,15 +94,16 @@ export function analyzeProposal(params: {
   idea_id?: string;
   group_id?: string;
 }): Promise<ProposalAnalysis | null> {
-  return call("/proposals/analyze", { method: "POST", body: JSON.stringify(params) });
+  return call("/proposals/analyze", { method: "POST", body: JSON.stringify(params) },
+    ANALYSIS_TIMEOUT_MS);
 }
 
 export function proposalSummary(proposalId: string): Promise<{ summary: string } | null> {
-  return call(`/proposals/${proposalId}/summary`, { method: "POST" });
+  return call(`/proposals/${proposalId}/summary`, { method: "POST" }, ANALYSIS_TIMEOUT_MS);
 }
 
 export function proposalFeedback(
   proposalId: string,
 ): Promise<{ missing_required: string[]; suggestions: Record<string, string> } | null> {
-  return call(`/proposals/${proposalId}/feedback`, { method: "POST" });
+  return call(`/proposals/${proposalId}/feedback`, { method: "POST" }, ANALYSIS_TIMEOUT_MS);
 }
