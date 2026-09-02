@@ -85,10 +85,11 @@ beforeAll(async () => {
   await cleanup();
   await makeUser("coord", Role.COURSE_COORDINATOR);
   await makeUser("sup", Role.LECTURER, { approvedLecturer: true });
+  await makeUser("sup2", Role.LECTURER, { approvedLecturer: true });
   await makeUser("s1", Role.STUDENT, { student: true });
   await makeUser("s2", Role.STUDENT, { student: true });
   await makeUser("s3", Role.STUDENT, { student: true });
-  for (const k of ["coord", "sup", "s1", "s2", "s3"]) await login(k);
+  for (const k of ["coord", "sup", "sup2", "s1", "s2", "s3"]) await login(k);
 });
 
 afterAll(async () => {
@@ -270,5 +271,100 @@ describe("Week 4: idea visibility + approval — Coordinator-Managed", () => {
     // Even approved, group A's idea stays hidden from group B.
     const b1View = await request(app).get(`/courses/${cpiId}/ideas`).set(as("s3"));
     expect(titles(b1View)).toEqual(["COORD-IDEA", "GROUP-B-IDEA"]);
+  });
+});
+
+// Three separate causes stopped this working, and all three were live at once:
+// a coordinator-posted idea has no supervisor row so nobody passed the check;
+// a group's supervisor is recorded on the selection, not the idea, so the
+// person actually supervising it did not count; and the routes were gated to
+// IDEA_ANNOUNCEMENT, which has closed by the time selection pairs anyone.
+describe("Naming a co-supervisor", () => {
+  it("lets the coordinator name one on an idea they posted themselves", async () => {
+    const cpiId = await createCpi(`${PREFIX}cosup-coord`);
+    // A coordinator may only post ideas in Coordinator-Managed mode.
+    await request(app).post(`/courses/${cpiId}/coordinator-managed-preset`).set(as("coord")).expect(200);
+    await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
+
+    const idea = await request(app)
+      .post(`/courses/${cpiId}/ideas`)
+      .set(as("coord"))
+      .send({ title: "Coordinator idea", description: "Posted by the course owner" });
+    expect(idea.status).toBe(201);
+
+    const invited = await request(app)
+      .post(`/courses/${cpiId}/ideas/${idea.body.id}/co-supervisors`)
+      .set(as("coord"))
+      .send({ lecturerUserId: userIds.sup });
+    expect(invited.status).toBe(201);
+    expect(invited.body.invitationStatus).toBe("PENDING");
+  });
+
+  it("lets the supervisor a group selected name one, after selection closed idea announcement", async () => {
+    const cpiId = await createCpi(`${PREFIX}cosup-selected`);
+    const { groupA } = await formGroups(cpiId);
+
+    await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
+    await request(app)
+      .post(`/courses/${cpiId}/supervisors`)
+      .set(as("coord"))
+      .send({ lecturerUserId: userIds.sup })
+      .expect(201);
+    await request(app)
+      .post(`/courses/${cpiId}/supervisors/respond`)
+      .set(as("sup"))
+      .send({ decision: "ACCEPT" })
+      .expect(200);
+
+    await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
+    const idea = await request(app)
+      .post(`/courses/${cpiId}/ideas`)
+      .set(as("s1"))
+      .send({ title: "The group's own idea", description: "Written by the group" });
+    expect(idea.status).toBe(201);
+
+    // Selection pairs the supervisor with the group. Idea announcement is now
+    // in the past, which is exactly when this used to become impossible.
+    await openPhase(cpiId, CpiPhase.PROJECT_SELECTION);
+    await request(app)
+      .post(`/courses/${cpiId}/selection/willing`)
+      .set(as("sup"))
+      .send({ ideaId: idea.body.id })
+      .expect(201);
+    const selection = await request(app)
+      .post(`/courses/${cpiId}/selection/select`)
+      .set(as("s1"))
+      .send({ ideaId: idea.body.id, supervisorUserId: userIds.sup });
+    expect(selection.status).toBe(201);
+    await request(app)
+      .post(`/courses/${cpiId}/selection/${selection.body.id}/respond`)
+      .set(as("sup"))
+      .send({ decision: "ACCEPT" })
+      .expect(200);
+
+    const invited = await request(app)
+      .post(`/courses/${cpiId}/ideas/${idea.body.id}/co-supervisors`)
+      .set(as("coord"))
+      .send({ lecturerUserId: userIds.sup2 });
+    expect(invited.status).toBe(201);
+    expect(groupA).toBeDefined();
+  });
+
+  it("still refuses a lecturer with nothing to do with the idea", async () => {
+    const cpiId = await createCpi(`${PREFIX}cosup-stranger`);
+    await request(app).post(`/courses/${cpiId}/coordinator-managed-preset`).set(as("coord")).expect(200);
+    await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
+
+    const idea = await request(app)
+      .post(`/courses/${cpiId}/ideas`)
+      .set(as("coord"))
+      .send({ title: "Not theirs", description: "Someone else's idea" });
+    expect(idea.status).toBe(201);
+
+    const refused = await request(app)
+      .post(`/courses/${cpiId}/ideas/${idea.body.id}/co-supervisors`)
+      .set(as("sup"))
+      .send({ lecturerUserId: userIds.sup2 });
+    expect(refused.status).toBe(403);
   });
 });

@@ -1,4 +1,4 @@
-import { AllocationSource, CourseInstance, CpiPhase, SelectionStatus } from "@prisma/client";
+import { AllocationSource, CourseInstance, CpiPhase, InvitationStatus, SelectionStatus } from "@prisma/client";
 import { prisma } from "../../config/database";
 import { AuthError } from "../auth/auth.service";
 import { loadOwnedCpi } from "../courses/courses.service";
@@ -27,8 +27,38 @@ async function assertAllocationOpen(cpiId: string) {
 }
 
 const allocationInclude = {
-  group: { select: { id: true, name: true } },
-  idea: { select: { id: true, title: true, authorType: true } },
+  // Members and co-supervisors are what make this a record of who is working
+  // with whom, rather than a list of group names.
+  group: {
+    select: {
+      id: true,
+      name: true,
+      members: {
+        where: { status: InvitationStatus.ACCEPTED },
+        select: {
+          student: {
+            select: { studentId: true, user: { select: { fullName: true, email: true } } },
+          },
+        },
+        orderBy: { student: { studentId: "asc" } },
+      },
+    },
+  },
+  idea: {
+    select: {
+      id: true,
+      title: true,
+      authorType: true,
+      supervisors: {
+        select: {
+          isPrimary: true,
+          invitationStatus: true,
+          lecturer: { select: { user: { select: { email: true, fullName: true } } } },
+        },
+        orderBy: { isPrimary: "desc" },
+      },
+    },
+  },
   supervisor: { include: { user: { select: { email: true, fullName: true } } } },
 } as const;
 

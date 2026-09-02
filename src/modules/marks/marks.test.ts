@@ -533,6 +533,39 @@ describe("Grades and the CA sheet", () => {
     expect(view.body.groups[0].students[0].grade).toBe("A");
   });
 
+  // The switch existed and could not work: the view loaded a stage only when its
+  // marks were released, so a course releasing grades alone graded off zero.
+  it("gives a grade with no figures when grades are released and marks are not", async () => {
+    const s = await aggregatedWithGrades();
+    await request(app).patch(`/courses/${s.cpiId}/policy`).set(as("coord")).send({ gradingEnabled: true }).expect(200);
+    await request(app)
+      .put(`/courses/${s.cpiId}/marks/grade-bands`)
+      .set(as("coord"))
+      .send({ bands: [{ label: "B", minPercent: 65 }, { label: "A", minPercent: 85 }] })
+      .expect(200);
+
+    await request(app)
+      .post(`/courses/${s.cpiId}/marks/publish`)
+      .set(as("coord"))
+      .send({ stageId: null, publishMarks: false, publishComments: false, publishGrades: true })
+      .expect(200);
+
+    const view = await request(app).get(`/courses/${s.cpiId}/marks`).set(as("s1")).expect(200);
+
+    expect(view.body.marksReleased).toBe(false);
+    // Released, so not still to come.
+    expect(view.body.pendingStages).toEqual([]);
+
+    const student = view.body.groups[0].students[0];
+    // Graded off the marks behind it, which are never handed over.
+    expect(student.grade).toBe("A");
+    expect(student.overall).toBeNull();
+    expect(student.contributionToModule).toBeNull();
+    expect(student.stages).toEqual([]);
+    expect(view.body.groups[0].overall).toBeNull();
+    expect(view.body.groups[0].stages).toEqual([]);
+  });
+
   it("reports a contribution instead of a grade when the project is part of a module", async () => {
     const s = await aggregatedWithGrades();
     await request(app)

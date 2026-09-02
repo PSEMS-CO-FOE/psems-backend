@@ -419,6 +419,8 @@ model CpiPolicy {
   // The group size the coordinator wants. Advisory only — a group over or under
   // it is flagged on the roster, never refused.
   targetGroupSize              Int?    @map("target_group_size")
+  // No longer read: a student allowed to work alone always gets their group
+  // made for them. Kept so the column can be dropped in its own migration.
   autoCreateSoloGroup          Boolean @default(true) @map("auto_create_solo_group")
 
   // Evaluation.
