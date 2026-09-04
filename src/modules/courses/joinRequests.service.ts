@@ -104,3 +104,104 @@ export async function decideJoinRequest(
 
   return decided;
 }
+
+/**
+ * Students the coordinator could add: same department, a different batch from
+ * the one this course is open to, and not already on it. A repeated student who
+ * does not know to ask would otherwise be unreachable — the request had to come
+ * from them, and nothing let the coordinator start it.
+ */
+export async function listAddableStudents(coordinatorUserId: string, cpiId: string, q?: string) {
+  const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
+
+  const alreadyOn = await prisma.courseJoinRequest.findMany({
+    where: { courseInstanceId: cpiId, status: JoinRequestStatus.APPROVED },
+    select: { studentId: true },
+  });
+
+  const students = await prisma.student.findMany({
+    where: {
+      department: cpi.department,
+      // The course's own batch already sees it; adding them would be a no-op.
+      batch: { not: cpi.batch },
+      id: { notIn: alreadyOn.map((r) => r.studentId) },
+      user: { suspendedAt: null },
+      ...(q
+        ? {
+            OR: [
+              { studentId: { contains: q, mode: "insensitive" as const } },
+              { registrationNumber: { contains: q, mode: "insensitive" as const } },
+              { user: { fullName: { contains: q, mode: "insensitive" as const } } },
+              { user: { email: { contains: q, mode: "insensitive" as const } } },
+            ],
+          }
+        : {}),
+    },
+    select: {
+      id: true,
+      studentId: true,
+      registrationNumber: true,
+      batch: true,
+      user: { select: { fullName: true, email: true } },
+    },
+    orderBy: [{ batch: "desc" }, { studentId: "asc" }],
+    take: 50,
+  });
+
+  // A request they made themselves and had declined should not look like a
+  // fresh candidate with no history.
+  const pending = await prisma.courseJoinRequest.findMany({
+    where: { courseInstanceId: cpiId, studentId: { in: students.map((s) => s.id) } },
+    select: { studentId: true, status: true },
+  });
+  const stateByStudent = new Map(pending.map((r) => [r.studentId, r.status]));
+
+  return students.map((student) => ({ ...student, existingRequest: stateByStudent.get(student.id) ?? null }));
+}
+
+/**
+ * The coordinator adding someone directly. Approval has always been the access,
+ * so this writes the same approved row their own request would have produced.
+ */
+export async function addStudent(coordinatorUserId: string, cpiId: string, studentId: string, note?: string) {
+  const cpi = await loadOwnedCpi(coordinatorUserId, cpiId);
+
+  const student = await prisma.student.findUnique({ where: { id: studentId } });
+  if (!student) throw new AuthError(404, "Student not found");
+  if (student.department !== cpi.department) {
+    throw new AuthError(403, "That student belongs to another department");
+  }
+  if (student.batch === cpi.batch) {
+    throw new AuthError(409, "That course is already open to their batch");
+  }
+
+  const reason = note?.trim() || "Added by the coordinator";
+  const decision = {
+    status: JoinRequestStatus.APPROVED,
+    decidedById: coordinatorUserId,
+    decidedAt: new Date(),
+  };
+
+  const existing = await prisma.courseJoinRequest.findUnique({
+    where: { courseInstanceId_studentId: { courseInstanceId: cpiId, studentId } },
+  });
+  if (existing?.status === JoinRequestStatus.APPROVED) {
+    throw new AuthError(409, "That student is already on this course");
+  }
+
+  const added = existing
+    ? await prisma.courseJoinRequest.update({ where: { id: existing.id }, data: { reason, ...decision } })
+    : await prisma.courseJoinRequest.create({
+        data: { courseInstanceId: cpiId, studentId, reason, ...decision },
+      });
+
+  await notify(student.userId, {
+    type: "COURSE_JOIN_APPROVED",
+    title: "You were added to a course",
+    body: `You can now take "${cpi.name}" with ${cpi.batch}.${note ? ` ${note}` : ""}`,
+    courseInstanceId: cpiId,
+    email: true,
+  });
+
+  return added;
+}

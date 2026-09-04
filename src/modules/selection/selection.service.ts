@@ -391,15 +391,22 @@ export async function acceptInterestedGroup(
   ideaId: string,
   groupId: string,
 ) {
-  await loadCpi(cpiId);
-  const lecturerId = await getAcceptedSupervisorLecturerId(userId, cpiId);
-  if (!lecturerId) throw new AuthError(403, "Only an accepted supervisor of this CPI can do this");
-
+  const cpi = await loadCpi(cpiId);
   const idea = await loadIdeaInCpi(ideaId, cpiId);
-  const owns = await prisma.ideaSupervisor.findFirst({
-    where: { ideaId, lecturerId, invitationStatus: "ACCEPTED" },
-  });
-  if (!owns) throw new AuthError(403, "That idea is not yours to award");
+
+  // Whoever owns the idea awards it, and a coordinator-posted idea has no
+  // supervisor row to own it — so the course owner awards their own ideas. One
+  // rule for every idea: register interest, and the person who posted it picks.
+  const lecturerId = await getAcceptedSupervisorLecturerId(userId, cpiId);
+  const asCoordinator = cpi.createdById === userId && idea.authorType === IdeaAuthorType.COORDINATOR;
+
+  if (!asCoordinator) {
+    if (!lecturerId) throw new AuthError(403, "Only an accepted supervisor of this CPI can do this");
+    const owns = await prisma.ideaSupervisor.findFirst({
+      where: { ideaId, lecturerId, invitationStatus: "ACCEPTED" },
+    });
+    if (!owns) throw new AuthError(403, "That idea is not yours to award");
+  }
 
   const interest = await prisma.interestExpression.findUnique({
     where: { groupId_ideaId_type: { groupId, ideaId, type: EoiType.GROUP_INTEREST } },
@@ -423,7 +430,9 @@ export async function acceptInterestedGroup(
       courseInstanceId: cpiId,
       groupId,
       ideaId,
-      supervisorLecturerId: lecturerId,
+      // Null when the coordinator awards their own idea: nobody supervises it
+      // in the lecturer sense, and the coordinator is already the confirmer.
+      supervisorLecturerId: asCoordinator ? null : lecturerId,
       status: SelectionStatus.ACCEPTED,
       respondedAt: new Date(),
     },
@@ -577,14 +586,24 @@ export async function getSelectionState(userId: string, cpiId: string) {
   return { role: "STUDENT", groupInterest, willingSupervisors, selection };
 }
 
+// The description travels with the title: a supervisor deciding whether to take
+// a project on cannot do it from a name, and had no way to read the rest.
+const ideaSelect = {
+  id: true,
+  title: true,
+  description: true,
+  authorType: true,
+  author: { select: { fullName: true, email: true } },
+} as const;
+
 const eoiInclude = {
-  idea: { select: { id: true, title: true, authorType: true } },
+  idea: { select: ideaSelect },
   group: { select: { id: true, name: true } },
   supervisor: { include: { user: { select: { id: true, email: true, fullName: true } } } },
 } as const;
 
 const selectionInclude = {
-  idea: { select: { id: true, title: true, authorType: true } },
+  idea: { select: ideaSelect },
   group: { select: { id: true, name: true } },
   supervisor: { include: { user: { select: { id: true, email: true, fullName: true } } } },
 } as const;

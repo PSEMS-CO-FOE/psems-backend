@@ -353,6 +353,66 @@ describe("Supervisor picks from the interested groups", () => {
     expect(twice.status).toBe(409);
   });
 
+  // Every idea is awarded by whoever posted it. A coordinator-posted idea has no
+  // supervisor row to own it, so before this it was the one kind nobody could
+  // award and the group had to make a formal selection instead.
+  it("lets the coordinator award an idea they posted themselves", async () => {
+    const cpiId = await createCpi("Coordinator-awards CPI");
+    // The preset is what lets the coordinator post an idea at all; it also
+    // switches interest off, which this flow needs back on.
+    await request(app).post(`/courses/${cpiId}/coordinator-managed-preset`).set(as("coord")).expect(200);
+    await request(app)
+      .patch(`/courses/${cpiId}/policy`)
+      .set(as("coord"))
+      .send({ interestEnabled: true })
+      .expect(200);
+
+    await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);
+    const groupA = await createGroup(cpiId, "s1", "Alpha");
+    const groupB = await createGroup(cpiId, "s3", "Beta");
+
+    await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
+    const ideaId = await postIdea(cpiId, "coord", "COORD-OWNED");
+
+    await openPhase(cpiId, CpiPhase.PROJECT_SELECTION);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId }).expect(201);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s3")).send({ ideaId }).expect(201);
+
+    const awarded = await request(app)
+      .post(`/courses/${cpiId}/selection/accept-interest`)
+      .set(as("coord"))
+      .send({ ideaId, groupId: groupA });
+    expect(awarded.status).toBe(201);
+    expect(awarded.body.status).toBe("ACCEPTED");
+    // Nobody supervises it in the lecturer sense; the coordinator holds it.
+    expect(awarded.body.supervisorLecturerId).toBeNull();
+
+    // The other group keeps its interest and is still free.
+    expect(await prisma.projectSelection.findFirst({ where: { groupId: groupB } })).toBeNull();
+  });
+
+  it("does not let the coordinator award a supervisor's idea", async () => {
+    const cpiId = await createCpi("Coordinator-oversteps CPI");
+    await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);
+    const groupA = await createGroup(cpiId, "s1", "Alpha");
+
+    await openPhase(cpiId, CpiPhase.SUPERVISOR_ADDITION);
+    await acceptSupervisor(cpiId, "sup");
+
+    await openPhase(cpiId, CpiPhase.IDEA_ANNOUNCEMENT);
+    const ideaId = await postIdea(cpiId, "sup", "SUP-OWNED");
+
+    await openPhase(cpiId, CpiPhase.PROJECT_SELECTION);
+    await request(app).post(`/courses/${cpiId}/selection/interest`).set(as("s1")).send({ ideaId }).expect(201);
+
+    // It is the supervisor's to award, not the course owner's.
+    await request(app)
+      .post(`/courses/${cpiId}/selection/accept-interest`)
+      .set(as("coord"))
+      .send({ ideaId, groupId: groupA })
+      .expect(403);
+  });
+
   it("refuses a group with no interest, and a lecturer who does not own the idea", async () => {
     const cpiId = await createCpi("Supervisor-picks guards CPI");
     await openPhase(cpiId, CpiPhase.STUDENT_REGISTRATION);

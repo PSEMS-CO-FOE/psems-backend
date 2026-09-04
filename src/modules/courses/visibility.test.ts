@@ -172,6 +172,75 @@ describe("Joining another batch's course", () => {
     expect((await listFor("s21")).body.map((c: { id: string }) => c.id)).not.toContain(cpiId);
   });
 
+  // Approving has always been the access; nothing let the coordinator start it,
+  // so a repeated student who did not know to ask could not be enrolled at all.
+  describe("the coordinator adding a student directly", () => {
+    it("offers students from other batches, and not this course's own", async () => {
+      const cpiId = await makeCourse({ batch: BATCH, name: "Direct add pool", publish: true });
+
+      const pool = await request(app).get(`/courses/${cpiId}/addable-students`).set(as("coord")).expect(200);
+      const batches = pool.body.map((r: { batch: string }) => r.batch);
+      expect(batches).toContain(PAST_BATCH);
+      expect(batches).not.toContain(BATCH);
+    });
+
+    it("finds a student by index number", async () => {
+      const cpiId = await makeCourse({ batch: BATCH, name: "Direct add search", publish: true });
+      const s21 = await prisma.student.findFirst({ where: { user: { email: h.email("s21") } } });
+
+      const found = await request(app)
+        .get(`/courses/${cpiId}/addable-students`)
+        .query({ q: s21!.studentId })
+        .set(as("coord"))
+        .expect(200);
+      expect(found.body.map((r: { id: string }) => r.id)).toEqual([s21!.id]);
+    });
+
+    it("adds them, and the course becomes visible without them asking", async () => {
+      const cpiId = await makeCourse({ batch: BATCH, name: "Direct add", publish: true });
+      const s21 = await prisma.student.findFirst({ where: { user: { email: h.email("s21") } } });
+
+      expect((await listFor("s21")).body.map((c: { id: string }) => c.id)).not.toContain(cpiId);
+
+      await request(app)
+        .post(`/courses/${cpiId}/added-students`)
+        .set(as("coord"))
+        .send({ studentId: s21!.id, note: "Repeating this module" })
+        .expect(201);
+
+      expect((await listFor("s21")).body.map((c: { id: string }) => c.id)).toContain(cpiId);
+    });
+
+    it("refuses a second add, and a student already open to the course", async () => {
+      const cpiId = await makeCourse({ batch: BATCH, name: "Direct add twice", publish: true });
+      const s21 = await prisma.student.findFirst({ where: { user: { email: h.email("s21") } } });
+      const s22 = await prisma.student.findFirst({ where: { user: { email: h.email("s22") } } });
+
+      await request(app)
+        .post(`/courses/${cpiId}/added-students`)
+        .set(as("coord"))
+        .send({ studentId: s21!.id })
+        .expect(201);
+      await request(app)
+        .post(`/courses/${cpiId}/added-students`)
+        .set(as("coord"))
+        .send({ studentId: s21!.id })
+        .expect(409);
+
+      // Their batch already sees it, so adding them means nothing.
+      await request(app)
+        .post(`/courses/${cpiId}/added-students`)
+        .set(as("coord"))
+        .send({ studentId: s22!.id })
+        .expect(409);
+    });
+
+    it("is closed to a student", async () => {
+      const cpiId = await makeCourse({ batch: BATCH, name: "Direct add guarded", publish: true });
+      await request(app).get(`/courses/${cpiId}/addable-students`).set(as("s21")).expect(403);
+    });
+  });
+
   it("refuses a request for the student's own batch", async () => {
     const cpiId = await makeCourse({ batch: BATCH, name: "Already mine", publish: true });
     await request(app)
