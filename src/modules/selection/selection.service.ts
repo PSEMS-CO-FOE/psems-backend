@@ -586,14 +586,24 @@ export async function getSelectionState(userId: string, cpiId: string) {
   return { role: "STUDENT", groupInterest, willingSupervisors, selection };
 }
 
+// The description travels with the title: a supervisor deciding whether to take
+// a project on cannot do it from a name, and had no way to read the rest.
+const ideaSelect = {
+  id: true,
+  title: true,
+  description: true,
+  authorType: true,
+  author: { select: { fullName: true, email: true } },
+} as const;
+
 const eoiInclude = {
-  idea: { select: { id: true, title: true, authorType: true } },
+  idea: { select: ideaSelect },
   group: { select: { id: true, name: true } },
   supervisor: { include: { user: { select: { id: true, email: true, fullName: true } } } },
 } as const;
 
 const selectionInclude = {
-  idea: { select: { id: true, title: true, authorType: true } },
+  idea: { select: ideaSelect },
   group: { select: { id: true, name: true } },
   supervisor: { include: { user: { select: { id: true, email: true, fullName: true } } } },
 } as const;
