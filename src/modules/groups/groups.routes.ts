@@ -56,6 +56,25 @@ groupsRouter.post("/solo", ...studentAuthed, inRegistration, async (req, res, ne
   }
 });
 
+groupsRouter.delete("/:groupId/invites/:memberId", ...studentAuthed, inRegistration, async (req, res, next) => {
+  try {
+    return res.json(
+      await groups.revokeInvite(req.user!.user_id, req.params.cpiId, req.params.groupId, req.params.memberId),
+    );
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Undoing how you chose to take part, while nothing depends on it yet.
+groupsRouter.delete("/:groupId", ...studentAuthed, inRegistration, async (req, res, next) => {
+  try {
+    return res.json(await groups.disbandGroup(req.user!.user_id, req.params.cpiId, req.params.groupId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
 groupsRouter.get("/mine", ...studentAuthed, async (req, res, next) => {
   try {
     return res.json(await groups.getMyGroup(req.user!.user_id, req.params.cpiId));

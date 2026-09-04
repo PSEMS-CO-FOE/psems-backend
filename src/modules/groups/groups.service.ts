@@ -272,3 +272,65 @@ async function isRegistrationClosed(cpiId: string): Promise<boolean> {
   if (!window) return false;
   return new Date() > window.endDate;
 }
+
+/**
+ * The leader taking back an invitation nobody has answered. Sending one was
+ * always possible and undoing it was not, so a wrong address sat on the group
+ * for the rest of the course and blocked that student from being invited again.
+ */
+export async function revokeInvite(leaderUserId: string, cpiId: string, groupId: string, memberId: string) {
+  const leader = await loadStudent(leaderUserId);
+  const group = await loadGroupInCpi(groupId, cpiId);
+  if (group.leaderStudentId !== leader.id) {
+    throw new AuthError(403, "Only the group leader can withdraw an invitation");
+  }
+
+  const membership = await prisma.groupMember.findUnique({ where: { id: memberId } });
+  if (!membership || membership.groupId !== groupId) {
+    throw new AuthError(404, "Invitation not found in this group");
+  }
+  if (membership.status === InvitationStatus.ACCEPTED) {
+    throw new AuthError(409, "They have already joined — an accepted member cannot be withdrawn");
+  }
+
+  // Removed rather than marked declined: declined is the invitee's answer, and
+  // recording the leader's change of mind as their refusal would be a lie.
+  await prisma.groupMember.delete({ where: { id: memberId } });
+  return { revoked: true };
+}
+
+/**
+ * Undoing the choice of how to take part. Working alone creates a group of one,
+ * and creating a group is a click away from it, so both are easy to pick by
+ * mistake and neither could be taken back.
+ *
+ * Only while registration is open, only the leader, only before the group has a
+ * project, and only while they are its one accepted member — a leader must not
+ * be able to disband a team that has formed around them.
+ */
+export async function disbandGroup(leaderUserId: string, cpiId: string, groupId: string) {
+  const leader = await loadStudent(leaderUserId);
+  const group = await loadGroupInCpi(groupId, cpiId);
+  if (group.leaderStudentId !== leader.id) {
+    throw new AuthError(403, "Only the group leader can undo this");
+  }
+
+  const accepted = await prisma.groupMember.count({
+    where: { groupId, status: InvitationStatus.ACCEPTED },
+  });
+  if (accepted > 1) {
+    throw new AuthError(409, "Others have joined — they have to leave before the group can be undone");
+  }
+
+  const selection = await prisma.projectSelection.findFirst({
+    where: { groupId, status: { not: "DECLINED" } },
+  });
+  if (selection) throw new AuthError(409, "Your group already has a project");
+
+  const idea = await prisma.projectIdea.findFirst({ where: { groupId } });
+  if (idea) throw new AuthError(409, "Your group has posted an idea — remove it first");
+
+  // Members and any interest cascade from the group row.
+  await prisma.group.delete({ where: { id: groupId } });
+  return { disbanded: true };
+}
