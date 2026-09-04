@@ -8,6 +8,7 @@ import {
   applyPresetSchema,
   assignEvaluatorSchema,
   createCpiSchema,
+  addStudentSchema,
   decideJoinRequestSchema,
   decideSupervisorRequestSchema,
   joinRequestSchema,
@@ -156,6 +157,29 @@ coursesRouter.post("/:cpiId/join-requests", ...authed, async (req, res, next) =>
 coursesRouter.get("/:cpiId/join-requests", ...coordinatorOnly, async (req, res, next) => {
   try {
     return res.json(await joinRequests.listJoinRequests(req.user!.user_id, req.params.cpiId));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+// Students this course could take on, for the coordinator's picker. Before
+// this the request had to come from the student, so a repeated student who did
+// not know to ask could not be enrolled at all.
+coursesRouter.get("/:cpiId/addable-students", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const q = typeof req.query.q === "string" ? req.query.q.trim() : undefined;
+    return res.json(await joinRequests.listAddableStudents(req.user!.user_id, req.params.cpiId, q || undefined));
+  } catch (err) {
+    return next(err);
+  }
+});
+
+coursesRouter.post("/:cpiId/added-students", ...coordinatorOnly, async (req, res, next) => {
+  try {
+    const { studentId, note } = addStudentSchema.parse(req.body);
+    return res
+      .status(201)
+      .json(await joinRequests.addStudent(req.user!.user_id, req.params.cpiId, studentId, note));
   } catch (err) {
     return next(err);
   }

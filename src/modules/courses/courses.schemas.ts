@@ -54,6 +54,12 @@ export const setCourseStatusSchema = z.object({ status: z.nativeEnum(CourseStatu
 // required: an exam-related decision should say why it was made.
 export const joinRequestSchema = z.object({ reason: z.string().trim().min(1).max(1000) });
 
+// The coordinator adding someone directly, rather than answering their request.
+export const addStudentSchema = z.object({
+  studentId: z.string().uuid(),
+  note: z.string().trim().max(1000).optional(),
+});
+
 export const decideJoinRequestSchema = z.object({
   approve: z.boolean(),
   note: z.string().trim().max(1000).optional(),
